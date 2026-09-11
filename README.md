@@ -56,6 +56,10 @@ dotnet run --project AtlasSoftPlc.Web.csproj
 
 Abre `http://localhost:5035` (o el puerto indicado en `Properties/launchSettings.json`).
 
+> Credenciales de desarrollo: `admin` / `AtlasDemo!2026` (solo en `Development`;
+> ver `appsettings.Development.json`). En producción las contraseñas vienen de
+> variables de entorno (ver `## Despliegue en producción`).
+
 ## Ejecutar pruebas
 
 ```bash
@@ -114,6 +118,27 @@ motores, bombas, válvulas normalmente cerradas).
 ## Documentación
 
 Ver `docs/` para arquitectura, runtime, drivers, seguridad y pruebas.
+
+## Despliegue en producción
+
+Lista de verificación antes de exponer el sistema fuera de una red aislada:
+
+1. **HTTPS obligatorio.** Configura TLS y `ASPNETCORE_AllowedHosts` con el FQDN real
+   (no `*`). La cookie de auth se emite con `Secure` en producción automáticamente.
+2. **Contraseñas reales.** Define `Auth__SeedPassword` y `Auth__Seed__<usuario>=<rol>`
+   como variables de entorno (ver `.env.example`). Nunca commitees `.env`.
+3. **Migraciones.** El esquema se versiona con `SchemaMigrator`; cualquier cambio de
+   tabla requiere una migración nueva (no edites el SQL de migraciones ya aplicadas).
+4. **Observabilidad.** `/health` (liveness) y `/health/ready` (readiness) sin auth.
+   Logs estructurados (Serilog) en `%LocalAppData%/AtlasSoftPlc/logs/`.
+5. **Retención.** Timeline acotado en memoria (1000). Historian podable con
+   `HistorianService.PruneAsync(días)` — prográmalo (cron/hosted service).
+6. **Backup.** SQLite es un único archivo; respáldalo (`%LocalAppData%/AtlasSoftPlc/atlas.db`).
+
+> **Seguridad residual aceptada (MVP):** auth en memoria (lockout/rate-limit) no persiste
+> entre reinicios; auth por cookie sin refresh-token; no hay OPC UA/MQTT todavía.
+> Para multi-nodo o exposición pública, migra el store de usuarios y la BD a un motor
+> con HA y usa un IdP (OIDC/OAuth2).
 
 ## Licencias de terceros
 
