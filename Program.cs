@@ -217,6 +217,34 @@ app.MapHealthChecks("/health/ready", new Microsoft.AspNetCore.Diagnostics.Health
     Predicate = check => check.Tags.Contains("ready"),
 }).AllowAnonymous();
 
+// ── Plug-and-play: auto-apertura del navegador en el puerto real elegido ──
+// Con "applicationUrl": "http://localhost:0" Kestrel elige un puerto libre; aquí lo
+// leemos una vez arrancado y abrimos el navegador, de modo que el usuario no tenga
+// que copiar la URL ni configurar nada (portátil entre equipos, sin colisiones de puerto).
+if (app.Environment.IsDevelopment())
+{
+    var lifetime = app.Services.GetRequiredService<Microsoft.Extensions.Hosting.IHostApplicationLifetime>();
+    lifetime.ApplicationStarted.Register(() =>
+    {
+        // app.Urls expone las direcciones reales (con el puerto ya asignado por Kestrel).
+        var url = app.Urls.FirstOrDefault();
+        if (string.IsNullOrEmpty(url))
+            return;
+
+        var displayUrl = url.Replace("0.0.0.0", "localhost", StringComparison.Ordinal)
+                            .Replace("[::]", "localhost", StringComparison.Ordinal);
+        Log.Information("Aplicación lista en {Url}", displayUrl);
+        try
+        {
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(displayUrl) { UseShellExecute = true });
+        }
+        catch (Exception ex)
+        {
+            Log.Warning(ex, "No se pudo abrir el navegador automáticamente");
+        }
+    });
+}
+
 try
 {
     Log.Information("AtlasSoftPlc iniciando...");
