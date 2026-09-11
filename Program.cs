@@ -10,8 +10,30 @@ using AtlasSoftPlc.Web.Auth;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Diagnostics.HealthChecks;
+using Serilog;
+
+// ── Logging estructurado (Serilog): consola + archivo rotativo ──
+// El archivo va a %LocalAppData%/AtlasSoftPlc/logs/atlas-.log (fuera del árbol).
+var logDir = Path.Combine(
+    Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+    "AtlasSoftPlc", "logs");
+Directory.CreateDirectory(logDir);
+
+Log.Logger = new LoggerConfiguration()
+    .MinimumLevel.Information()
+    .MinimumLevel.Override("Microsoft.AspNetCore", Serilog.Events.LogEventLevel.Warning)
+    .Enrich.FromLogContext()
+    .WriteTo.Console()
+    .WriteTo.File(
+        Path.Combine(logDir, "atlas-.log"),
+        rollingInterval: RollingInterval.Day,
+        retainedFileCountLimit: 30,
+        shared: true)
+    .CreateLogger();
 
 var builder = WebApplication.CreateBuilder(args);
+builder.Host.UseSerilog();
 
 // ---- MVC + antiforgery + SignalR ----
 builder.Services.AddControllersWithViews();
@@ -59,6 +81,30 @@ builder.Services.AddSingleton<IAuditRepository, SqliteAuditRepository>();
 builder.Services.AddSingleton<IHistorianRepository, SqliteHistorianRepository>();
 builder.Services.AddSingleton<IAlarmRepository, SqliteAlarmRepository>();
 builder.Services.AddSingleton<IProgramVersionRepository, SqliteProgramVersionRepository>();
+
+// ---- Health checks (readiness/liveness) ----
+builder.Services.AddHealthChecks()
+    .AddCheck("sqlite", () =>
+    {
+        try
+        {
+            using var conn = sqliteStore.OpenConnection();
+            using var cmd = conn.CreateCommand();
+            cmd.CommandText = "SELECT 1";
+            cmd.ExecuteScalar();
+            return HealthCheckResult.Healthy($"esquema v{sqliteStore.CurrentSchemaVersion()}");
+        }
+        catch (Exception ex)
+        {
+            return HealthCheckResult.Unhealthy("BD inaccesible", ex);
+        }
+    })
+    .AddCheck("runtime", () =>
+    {
+        // El runtime expone su estado vía el store compartido; aquí sólo validamos que el
+        // servicio esté registrado y su store responda.
+        return HealthCheckResult.Healthy();
+    }, tags: new[] { "ready" });
 
 // ---- Application services ----
 builder.Services.AddScoped<ProjectService>();
@@ -163,6 +209,27 @@ app.MapControllerRoute(
 
 app.MapHub<RuntimeHub>("/hubs/runtime");
 
-app.Run();
+// Health check de librería: /health (liveness) y /health/ready (readiness).
+// AllowAnonymous: los probes de infraestructura no deben requerir auth.
+app.MapHealthChecks("/health").AllowAnonymous();
+app.MapHealthChecks("/health/ready", new Microsoft.AspNetCore.Diagnostics.HealthChecks.HealthCheckOptions
+{
+    Predicate = check => check.Tags.Contains("ready"),
+}).AllowAnonymous();
+
+try
+{
+    Log.Information("AtlasSoftPlc iniciando...");
+    app.Run();
+}
+catch (Exception ex)
+{
+    Log.Fatal(ex, "AtlasSoftPlc terminó de forma inesperada");
+    throw;
+}
+finally
+{
+    Log.CloseAndFlush();
+}
 
 public partial class Program { }

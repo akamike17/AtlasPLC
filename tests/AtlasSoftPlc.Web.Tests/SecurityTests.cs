@@ -82,6 +82,16 @@ public sealed class SecurityTests : IClassFixture<AtlasWebFactory>
     }
 
     [Fact]
+    public async Task HealthCheck_SinAuth_Devuelve200()
+    {
+        using var client = NewClient();
+        var resp = await client.GetAsync("/health");
+        Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
+        var body = await resp.Content.ReadAsStringAsync();
+        Assert.Contains("Healthy", body, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
     public async Task CabecerasSeguridad_Presentes()
     {
         using var client = NewClient();
