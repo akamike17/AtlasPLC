@@ -22,7 +22,7 @@ public sealed class PlcRuntimeService : BackgroundService
     private readonly WatchdogService _watchdog;
     private readonly IRuntimeNotifier _notifier;
     private readonly IRuntimeAuditSink? _audit;
-    private readonly ScanCoordinator _coordinator = new();
+    private readonly ScanCoordinator _coordinator;
     private readonly System.Threading.Channels.Channel<RuntimeCommand> _commands =
         System.Threading.Channels.Channel.CreateUnbounded<RuntimeCommand>();
 
@@ -31,15 +31,15 @@ public sealed class PlcRuntimeService : BackgroundService
 
     private LogicProgram? _activeProgram;
     private string? _activeProgramHash;
-    private IReadOnlyDictionary<Guid, VariableDefinition> _definitions = new Dictionary<Guid, VariableDefinition>();
+    private volatile IReadOnlyDictionary<Guid, VariableDefinition> _definitions = new Dictionary<Guid, VariableDefinition>();
     private Dictionary<Guid, RuntimeValue> _inputs = new();
     private Dictionary<Guid, RuntimeValue> _memory = new();
     private IReadOnlyCollection<Interlock> _interlocks = new List<Interlock>();
-    private Dictionary<Guid, PlcValue> _failsafeValues = new();
-    private Dictionary<Guid, PlcDataType> _outputTypes = new();
+    private volatile IReadOnlyDictionary<Guid, PlcValue> _failsafeValues = new Dictionary<Guid, PlcValue>();
+    private volatile IReadOnlyDictionary<Guid, PlcDataType> _outputTypes = new Dictionary<Guid, PlcDataType>();
     private readonly Dictionary<Guid, ForcedOutput> _forcedOutputs = new();
 
-    private RuntimeState _state = RuntimeState.Stopped;
+    private volatile RuntimeState _state = RuntimeState.Stopped;
     private RuntimeMode _mode = RuntimeMode.Simulation;
 
     private double _targetScanMs = 50;
@@ -51,20 +51,22 @@ public sealed class PlcRuntimeService : BackgroundService
     private DateTime? _lastCompleted;
 
     private IReadOnlyDictionary<Guid, RuntimeValue> _lastInputs = new Dictionary<Guid, RuntimeValue>();
-    private IReadOnlyDictionary<Guid, RuntimeValue> _lastOutputs = new Dictionary<Guid, RuntimeValue>();
+    private volatile IReadOnlyDictionary<Guid, RuntimeValue> _lastOutputs = new Dictionary<Guid, RuntimeValue>();
 
     public PlcRuntimeService(
         ILogger<PlcRuntimeService> logger,
         RuntimeStateStore store,
         WatchdogService watchdog,
         IRuntimeNotifier notifier,
-        IRuntimeAuditSink? audit = null)
+        IRuntimeAuditSink? audit = null,
+        ScanCoordinator? coordinator = null)
     {
         _logger = logger;
         _store = store;
         _watchdog = watchdog;
         _notifier = notifier;
         _audit = audit;
+        _coordinator = coordinator ?? new ScanCoordinator();
     }
 
     public System.Threading.Channels.Channel<RuntimeCommand> Commands => _commands;
@@ -164,7 +166,12 @@ public sealed class PlcRuntimeService : BackgroundService
         await ShutdownAsync();
     }
 
-    /// <summary>Transición a Faulted + failsafe disparada por el watchdog independiente.</summary>
+    /// <summary>
+    /// Transición a Faulted + failsafe disparada por el watchdog independiente. NO adquiere
+    /// <c>_coordinator</c> ni ningún otro recurso que un scan bloqueado pueda retener:
+    /// aplica el failsafe por la ruta lock-free. Así el watchdog cumple el failsafe aunque
+    /// el scan vigilado esté colgado dentro de <c>lock(_coordinator)</c>.
+    /// </summary>
     private void HandleWatchdogTimeout()
     {
         if (_state != RuntimeState.Running) return;
@@ -172,7 +179,10 @@ public sealed class PlcRuntimeService : BackgroundService
             _watchdog.TimeoutMs);
         _state = RuntimeState.Faulted;
         _watchdog.Armed = false;
-        ApplyFailsafeOutputs("watchdog timeout");
+
+        // Failsafe lock-free: no depende del lock del coordinator retenido por el scan.
+        ApplyFailsafeOutputsLockFree("watchdog timeout");
+
         _ = _notifier.NotifyStateChangedAsync(_state);
         Audit(AuditEventType.Fault, "Runtime", null, null, "watchdog timeout", "Faulted");
     }
@@ -487,42 +497,69 @@ public sealed class PlcRuntimeService : BackgroundService
 
     /// <summary>
     /// Lleva TODAS las salidas a sus valores failsafe de forma explícita y atómica
-    /// (P0-1). Se usa en Stop, Pause, Fault, shutdown y watchdog. No depende de que
-    /// exista una propuesta de lógica en ese scan.
+    /// (P0-1). Se usa en Stop, Pause, Fault y shutdown. No depende de que exista una
+    /// propuesta de lógica en ese scan. Corre en el propio hilo del loop, por lo que
+    /// puede adquirir <c>_coordinator</c>.
     /// </summary>
     private void ApplyFailsafeOutputs(string reason)
     {
         lock (_coordinator)
         {
-            var outputs = new Dictionary<Guid, RuntimeValue>();
-            foreach (var (id, def) in _definitions)
+            ApplyFailsafeOutputsCore(reason, _definitions, _failsafeValues);
+        }
+    }
+
+    /// <summary>
+    /// Variante lock-free para la transición watchdog ⟶ Faulted+failsafe. Un scan
+    /// bloqueado puede retener <c>_coordinator</c> indefinidamente; esta ruta NO adquiere
+    /// ese lock (ni ningún recurso retenible por el scan vigilado): lee la configuración
+    /// publicada por referencias atómicas (<see cref="_definitions"/>, <see cref="_failsafeValues"/>)
+    /// y aplica el failsafe a través del store, que tiene su propio lock independiente.
+    /// </summary>
+    private void ApplyFailsafeOutputsLockFree(string reason, Action? afterStoreUpdate = null)
+    {
+        var defs = _definitions;             // referencia publicada (swap atómico + volatile)
+        var failsafe = _failsafeValues;      // idem
+        ApplyFailsafeOutputsCore(reason, defs, failsafe, afterStoreUpdate);
+    }
+
+    /// <summary>Núcleo común: construye y publica los failsafe sin lock sobre el coordinator.</summary>
+    private void ApplyFailsafeOutputsCore(
+        string reason,
+        IReadOnlyDictionary<Guid, VariableDefinition> defs,
+        IReadOnlyDictionary<Guid, PlcValue> failsafe,
+        Action? afterStoreUpdate = null)
+    {
+        var outputs = new Dictionary<Guid, RuntimeValue>();
+        foreach (var (id, def) in defs)
+        {
+            if (def.Direction != VariableDirection.Output) continue;
+
+            var value = GetFailsafeOrDefault(id, def.DataType, failsafe);
+            outputs[id] = new RuntimeValue
             {
-                if (def.Direction != VariableDirection.Output) continue;
+                VariableId = id,
+                Value = value,
+                Quality = Quality.Good,
+                Source = ValueSource.Default,
+                TimestampUtc = DateTime.UtcNow,
+                SequenceNumber = _totalScans
+            };
+        }
 
-                var value = GetFailsafeOrDefault(id, def.DataType);
-                outputs[id] = new RuntimeValue
-                {
-                    VariableId = id,
-                    Value = value,
-                    Quality = Quality.Good,
-                    Source = ValueSource.Default,
-                    TimestampUtc = DateTime.UtcNow,
-                    SequenceNumber = _totalScans
-                };
-            }
+        _lastOutputs = outputs;
 
-            _lastOutputs = outputs;
+        _store.Update(m =>
+        {
+            m.State = _state;
+            m.Outputs = _lastOutputs;
+        });
 
-            _store.Update(m =>
-            {
-                m.State = _state;
-                m.Outputs = _lastOutputs;
-            });
+        afterStoreUpdate?.Invoke();
 
-            foreach (var (id, rv) in outputs)
-            {
-                _ = _notifier.NotifyOutputChangedAsync(id, rv.Value);
-            }
+        foreach (var (id, rv) in outputs)
+        {
+            _ = _notifier.NotifyOutputChangedAsync(id, rv.Value);
         }
 
         _logger.LogInformation("Failsafe aplicado a todas las salidas (motivo: {Reason})", reason);
@@ -532,9 +569,9 @@ public sealed class PlcRuntimeService : BackgroundService
     /// Failsafe configurado o, si falta, la política por defecto documentada en
     /// <see cref="FailsafePolicy"/>. Nunca un valor implícito (P0-1 + riesgo 4).
     /// </summary>
-    private PlcValue GetFailsafeOrDefault(Guid variableId, PlcDataType type)
+    private static PlcValue GetFailsafeOrDefault(Guid variableId, PlcDataType type, IReadOnlyDictionary<Guid, PlcValue> failsafe)
     {
-        if (_failsafeValues.TryGetValue(variableId, out var fs))
+        if (failsafe.TryGetValue(variableId, out var fs))
             return fs;
 
         return FailsafePolicy.Default(type);

@@ -144,12 +144,26 @@ public sealed class WatchdogService : IDisposable
     private long _timeoutTicks = TimeSpan.FromMilliseconds(2000).Ticks;
     private Timer? _timer;
     private readonly SemaphoreSlim _gate = new(1, 1);
+    private bool _armed;
 
     /// <summary>Se dispara (en un hilo del thread-pool) cuando un scan armado supera el timeout.</summary>
     public Action? OnTimeout { get; set; }
 
-    /// <summary>Indica si el watchdog debe vigilar (runtime en Running).</summary>
-    public volatile bool Armed;
+    /// <summary>
+    /// Indica si el watchdog debe vigilar (runtime en Running). Al armarse registra el
+    /// instante de armado, de modo que el PRIMER scan dispone del timeout completo y no
+    /// dispara prematuramente por no existir heartbeat previo.
+    /// </summary>
+    public bool Armed
+    {
+        get => _armed;
+        set
+        {
+            _armed = value;
+            if (value)
+                Interlocked.Exchange(ref _lastHeartbeatTicks, DateTime.UtcNow.Ticks);
+        }
+    }
 
     public RuntimeState Classification { get; private set; } = RuntimeState.Stopped;
 
@@ -173,11 +187,11 @@ public sealed class WatchdogService : IDisposable
     }
 
     /// <summary>
-    /// True solo si hubo un scan completado recientemente (dentro del timeout).
-    /// Nunca reporta salud por "loop vivo": sin heartbeat previo, está muerto.
+    /// True solo si hubo un scan completado recientemente (dentro del timeout). Sin
+    /// heartbeat previo, el plazo se mide desde el armado: el primer scan tiene el
+    /// timeout completo.
     /// </summary>
     public bool IsAlive =>
-        LastHeartbeatUtc is not null &&
         (DateTime.UtcNow.Ticks - Interlocked.Read(ref _lastHeartbeatTicks)) <= _timeoutTicks;
 
     /// <summary>Arranca el timer de vigilancia independiente.</summary>

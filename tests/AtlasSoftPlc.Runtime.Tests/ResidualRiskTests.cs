@@ -4,6 +4,7 @@ using AtlasSoftPlc.Domain.Logic;
 using AtlasSoftPlc.Domain.Runtime;
 using AtlasSoftPlc.Domain.Values;
 using AtlasSoftPlc.Domain.Variables;
+using AtlasSoftPlc.Runtime.Engine;
 using AtlasSoftPlc.Runtime.Hosting;
 using Xunit;
 
@@ -197,6 +198,120 @@ public class ResidualRiskTests
             Assert.Contains(sink.Events, e => e.Action == AuditEventType.Force);
             Assert.Contains(sink.Events, e => e.Action == AuditEventType.Shutdown);
         }
+    }
+
+    // ── P0 final: watchdog Faulted+failsafe sin depender del lock del coordinator ──
+
+    [Fact]
+    public async Task Watchdog_FailsafeCompletes_WhileCoordinatorLockHeld()
+    {
+        // Reproduce un scan que retiene/bloquea lock(_coordinator). El watchdog debe
+        // completar Faulted + failsafe MIENTRAS el lock sigue retenido. Si el failsafe
+        // recién apareciera al liberar el lock (dependencia del coordinator), este test
+        // FALLA.
+        var store = new RuntimeStateStore();
+        var wd = new WatchdogService();
+        wd.SetTimeoutMs(200);
+        var coordinator = new ScanCoordinator();
+        var svc = new PlcRuntimeService(
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<PlcRuntimeService>.Instance,
+            store, wd, new CountingNotifier(), audit: null, coordinator);
+
+        var motor = Guid.NewGuid();
+        var defs = new Dictionary<Guid, VariableDefinition>
+        {
+            [motor] = new VariableDefinition { Id = motor, Key = "Motor", DataType = PlcDataType.Bool, Direction = VariableDirection.Output }
+        };
+        var program = new LogicProgram
+        {
+            Name = "Motor",
+            Rules = new List<LogicRule>
+            {
+                new LogicRule
+                {
+                    Name = "On",
+                    Priority = 10,
+                    Condition = null,
+                    Actions = new List<LogicAction> { new SetOutputAction { VariableId = motor, Value = "true" } }
+                }
+            }
+        };
+        var failsafe = new Dictionary<Guid, PlcValue> { [motor] = PlcValue.Bool(false) };
+
+        svc.InstallConfiguration(program, defs, new List<Interlock>(), failsafe);
+
+        await svc.StartAsync(CancellationToken.None);
+        svc.Post(new ActivateProgramCommand(program));
+
+        // Esperar a que el loop entre en Running y arme el watchdog.
+        WaitUntil(() => store.Snapshot.State == RuntimeState.Running, "Running", 3000);
+
+        // Retener lock(coordinator) desde una tarea separada, simulando el scan bloqueado.
+        using var lockAcquired = new ManualResetEventSlim(false);
+        using var releaseLock = new ManualResetEventSlim(false);
+        var holder = Task.Run(() =>
+        {
+            lock (coordinator)
+            {
+                lockAcquired.Set();
+                releaseLock.Wait(); // retener el lock hasta que el test lo libere
+            }
+        });
+        lockAcquired.Wait();
+
+        // El loop intentará RunScan() → lock(_coordinator) → queda bloqueado aquí.
+        // NO liberamos el lock: el watchdog debe completar el failsafe sin él.
+        try
+        {
+            // Esperar hasta ~2s a que el watchdog dispare Faulted.
+            WaitUntil(() => store.Snapshot.State == RuntimeState.Faulted, "Faulted por watchdog", 2000);
+
+            // Mientras el lock sigue retenido, el output ya debe estar en failsafe.
+            Assert.True(store.Snapshot.Outputs.TryGetValue(motor, out var o), "output presente");
+            Assert.False(o.Value.AsBool(), "output en failsafe (OFF) mientras el coordinator sigue bloqueado");
+        }
+        finally
+        {
+            releaseLock.Set(); // liberar para que holder termine
+            await holder;
+            await svc.StopAsync(CancellationToken.None);
+        }
+    }
+
+    // ── Primer scan: armado inicial con timeout completo ──────────────────
+    [Fact]
+    public async Task Watchdog_FirstScan_SlowButWithinTimeout_DoesNotFire()
+    {
+        using var wd = new WatchdogService();
+        wd.SetTimeoutMs(1000);
+        wd.Armed = true; // primer scan armado: el plazo corre desde aquí
+
+        var fired = false;
+        wd.OnTimeout = () => fired = true;
+        wd.Start();
+
+        // Primer scan completa dentro del timeout.
+        await Task.Delay(200);
+        wd.Heartbeat();
+
+        Assert.True(wd.IsAlive);
+        Assert.False(fired);
+    }
+
+    [Fact]
+    public async Task Watchdog_FirstScan_SlowBeyondTimeout_Fires()
+    {
+        using var wd = new WatchdogService();
+        wd.SetTimeoutMs(150);
+        wd.Armed = true; // primer scan armado; sin heartbeat previo
+
+        var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        wd.OnTimeout = () => tcs.TrySetResult(true);
+        wd.Start();
+
+        // Primer scan NO completa dentro del timeout → el watchdog dispara.
+        var fired = await tcs.Task.WaitAsync(TimeSpan.FromSeconds(3));
+        Assert.True(fired);
     }
 
     private static void WaitUntil(Func<bool> condition, string reason, int timeoutMs = 3000)

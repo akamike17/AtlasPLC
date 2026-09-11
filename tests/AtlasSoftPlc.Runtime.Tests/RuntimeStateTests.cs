@@ -177,13 +177,24 @@ public class WatchdogServiceTests
     }
 
     [Fact]
-    public void IsAlive_False_WithoutAnyScanHeartbeat()
+    public void IsAlive_True_WithoutHeartbeat_WithinArmingTimeout()
     {
-        // Sin scan completado no debe reportar salud falsa (P0-4).
+        // Sin heartbeat previo el plazo se mide desde el armado/construcción: dentro del
+        // timeout, el watchdog está sano (el primer scan dispone del timeout completo).
         var wd = new WatchdogService();
         wd.SetTimeoutMs(100_000);
-        Assert.False(wd.IsAlive);
+        Assert.True(wd.IsAlive);
         Assert.Null(wd.LastHeartbeatUtc);
+    }
+
+    [Fact]
+    public void IsAlive_False_WhenTimeoutExpiresWithoutHeartbeat()
+    {
+        // Sin heartbeat y con timeout corto: al vencer el plazo, deja de estar vivo.
+        var wd = new WatchdogService();
+        wd.SetTimeoutMs(1);
+        Thread.Sleep(10);
+        Assert.False(wd.IsAlive);
     }
 
     [Fact]
