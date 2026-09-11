@@ -281,4 +281,29 @@ public class NullNotifierTests
 
         // no exception - internal state updated
     }
+
+    [Fact]
+    public void GetOutputs_ReflejaEstadoRealDelStore()
+    {
+        var store = new RuntimeStateStore();
+        var wd = new WatchdogService();
+        var notifier = new NullNotifier();
+        var svc = new PlcRuntimeService(NullLogger<PlcRuntimeService>.Instance, store, wd, notifier);
+
+        var motor = Guid.NewGuid();
+        // El snapshot inicial no tiene salidas.
+        Assert.Empty(svc.GetOutputs());
+
+        // Un scan (o force) actualiza el store con el valor real de la salida.
+        store.Update(m =>
+        {
+            m.Outputs = new Dictionary<Guid, RuntimeValue>
+            {
+                [motor] = new RuntimeValue { VariableId = motor, Value = PlcValue.Bool(true), Quality = Quality.Good }
+            };
+        });
+
+        var outputs = svc.GetOutputs();
+        Assert.True(outputs[motor].Value.AsBool());
+    }
 }

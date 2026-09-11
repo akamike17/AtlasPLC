@@ -83,13 +83,14 @@ public sealed class AuthService
         var now = DateTimeOffset.UtcNow;
         _failures.AddOrUpdate(
             username,
-            _ => (1, now.Add(_options.LockoutDuration)),
+            _ => (1, now), // primer fallo: cuenta 1, aún NO bloqueado
             (_, existing) =>
             {
                 var fails = existing.Fails + 1;
+                // Solo al alcanzar MaxFailedAttempts se activa el lockout.
                 if (fails >= _options.MaxFailedAttempts)
                     return (fails, now.Add(_options.LockoutDuration));
-                return (fails, now); // no locked yet
+                return (fails, existing.LockedUntil); // aún no bloqueado
             });
     }
 }

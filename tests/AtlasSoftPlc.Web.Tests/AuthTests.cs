@@ -1,4 +1,5 @@
 using System.Net;
+using AtlasSoftPlc.Web.Auth;
 using Microsoft.AspNetCore.Mvc.Testing;
 
 namespace AtlasSoftPlc.Web.Tests;
@@ -78,6 +79,49 @@ public sealed class AuthTests : IClassFixture<AtlasWebFactory>
         Assert.Equal(HttpStatusCode.OK, blocked.StatusCode); // no redirige
         var body = await blocked.Content.ReadAsStringAsync();
         Assert.Contains("bloqueada", body, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void AuthService_PrimerFallo_NoBloquea()
+    {
+        // Unidad directa del AuthService (sin HTTP): el 1º fallo NO debe bloquear.
+        var store = new FakeUserStore(new[]
+        {
+            new AtlasSoftPlc.Web.Auth.UserAccount("admin", new AtlasSoftPlc.Web.Auth.PasswordHasher().Hash("secreta"), "Administrator"),
+        });
+        var auth = new AtlasSoftPlc.Web.Auth.AuthService(store, new AtlasSoftPlc.Web.Auth.PasswordHasher(), new AuthOptions());
+
+        var r1 = auth.Authenticate("admin", "mala", "1.1.1.1");
+        var r2 = auth.Authenticate("admin", "mala", "1.1.1.1");
+        var r3 = auth.Authenticate("admin", "mala", "1.1.1.1");
+        var r4 = auth.Authenticate("admin", "mala", "1.1.1.1");
+
+        Assert.Equal(LoginResult.InvalidCredentials, r1);
+        Assert.Equal(LoginResult.InvalidCredentials, r2);
+        Assert.Equal(LoginResult.InvalidCredentials, r3);
+        Assert.Equal(LoginResult.InvalidCredentials, r4);
+
+        // El 5º fallo alcanza MaxFailedAttempts(5) → lockout
+        var r5 = auth.Authenticate("admin", "mala", "1.1.1.1");
+        Assert.Equal(LoginResult.InvalidCredentials, r5);
+
+        // El 6º intento, AUN con contraseña correcta, ya está bloqueado.
+        var r6 = auth.Authenticate("admin", "secreta", "1.1.1.1");
+        Assert.Equal(LoginResult.LockedOut, r6);
+    }
+
+    private sealed class FakeUserStore : AtlasSoftPlc.Web.Auth.IUserStore
+    {
+        private readonly Dictionary<string, AtlasSoftPlc.Web.Auth.UserAccount> _users;
+        public FakeUserStore(IEnumerable<AtlasSoftPlc.Web.Auth.UserAccount> users) =>
+            _users = users.ToDictionary(u => u.Username, StringComparer.OrdinalIgnoreCase);
+
+        public AtlasSoftPlc.Web.Auth.UserAccount? FindByUsername(string username) =>
+            _users.TryGetValue(username, out var u) ? u : null;
+
+        public void Upsert(AtlasSoftPlc.Web.Auth.UserAccount user) => _users[user.Username] = user;
+
+        public IEnumerable<AtlasSoftPlc.Web.Auth.UserAccount> All() => _users.Values;
     }
 
     [Fact]

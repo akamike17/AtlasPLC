@@ -19,6 +19,8 @@ public sealed class LogicRule
 public sealed class LogicProgram
 {
     public Guid Id { get; set; } = Guid.NewGuid();
+    /// <summary>Proyecto al que pertenece el programa (relación de persistencia).</summary>
+    public Guid ProjectId { get; set; }
     public string Name { get; set; } = string.Empty;
     public int Version { get; set; } = 1;
     public bool Enabled { get; set; } = true;

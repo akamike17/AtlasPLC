@@ -83,7 +83,7 @@ public class AuditServiceTests
 public class AlarmServiceTests
 {
     [Fact]
-    public async Task SaveDefinitionAsync_GetDefinitionsAsync_ReturnsEmptyList()
+    public async Task SaveDefinitionAsync_GetDefinitionsAsync_Roundtrip()
     {
         using var db = new TestDb();
         var repo = new SqliteAlarmRepository(db.Store);
@@ -101,7 +101,9 @@ public class AlarmServiceTests
         await svc.SaveDefinitionAsync(def);
 
         var defs = await svc.GetDefinitionsAsync();
-        Assert.Empty(defs);
+        Assert.Single(defs);
+        Assert.Equal(def.Id, defs[0].Id);
+        Assert.Equal("HighTemp", defs[0].Name);
     }
 
     [Fact]

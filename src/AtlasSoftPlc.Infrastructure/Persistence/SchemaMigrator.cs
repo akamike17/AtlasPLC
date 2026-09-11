@@ -9,11 +9,13 @@ namespace AtlasSoftPlc.Infrastructure.Persistence;
 /// </summary>
 public static class SchemaMigrator
 {
-    public const int LatestVersion = 1;
+    public const int LatestVersion = 3;
 
     private static readonly (int Version, string Sql)[] Migrations =
     {
         (1, Migration1),
+        (2, Migration2),
+        (3, Migration3),
     };
 
     public static void Migrate(SqliteStore store)
@@ -138,5 +140,21 @@ CREATE TABLE IF NOT EXISTS Users (
 CREATE INDEX IF NOT EXISTS IX_Variables_Project ON Variables(ProjectId);
 CREATE INDEX IF NOT EXISTS IX_Programs_Project ON LogicPrograms(ProjectId);
 CREATE INDEX IF NOT EXISTS IX_Historian_Variable ON HistorianSamples(VariableId, TimestampUtc);
+";
+
+    // ── Migración 2: definiciones de alarmas (separadas de las instancias) ──
+    private const string Migration2 = @"
+CREATE TABLE IF NOT EXISTS AlarmDefinitions (
+    Id TEXT PRIMARY KEY,
+    Json TEXT NOT NULL
+);
+";
+
+    // ── Migración 3: columnas de timestamp ordenables para auditoría y proyectos ──
+    // Antes se ordenaba por el JSON literal (no cronológico). Añadimos columnas reales
+    // para ordenar por fecha de forma fiable.
+    private const string Migration3 = @"
+ALTER TABLE AuditEvents ADD COLUMN TimestampUtc TEXT NULL;
+ALTER TABLE Projects ADD COLUMN CreatedUtc TEXT NULL;
 ";
 }

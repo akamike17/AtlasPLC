@@ -7,6 +7,8 @@ namespace AtlasSoftPlc.Domain.Variables;
 public sealed class VariableDefinition
 {
     public Guid Id { get; set; } = Guid.NewGuid();
+    /// <summary>Proyecto al que pertenece la variable (relación de persistencia).</summary>
+    public Guid ProjectId { get; set; }
     public string Key { get; set; } = string.Empty;
     public string DisplayName { get; set; } = string.Empty;
     public string Description { get; set; } = string.Empty;

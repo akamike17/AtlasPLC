@@ -59,7 +59,7 @@ public sealed class SecurityTests : IClassFixture<AtlasWebFactory>
 
         // Obtener token CSRF
         var token = await GetCsrfTokenAsync(client);
-        
+
         var payload = JsonContent.Create(new { value = true });
         var req = new HttpRequestMessage(HttpMethod.Post, "/api/runtime/inputs/00000000-0000-0000-0000-000000000000")
         {

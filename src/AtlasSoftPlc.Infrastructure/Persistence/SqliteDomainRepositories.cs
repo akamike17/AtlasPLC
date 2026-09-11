@@ -13,13 +13,28 @@ public sealed class SqliteAlarmRepository : IAlarmRepository
 
     public async Task<IReadOnlyList<AlarmDefinition>> GetDefinitionsAsync(CancellationToken ct = default)
     {
-        // Definitions and instances share the table via JSON; we store only instances.
-        return await Task.FromResult(new List<AlarmDefinition>());
+        using var conn = _store.OpenConnection();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT Json FROM AlarmDefinitions";
+        var list = new List<AlarmDefinition>();
+        await using var r = await cmd.ExecuteReaderAsync(ct);
+        while (await r.ReadAsync(ct))
+        {
+            var d = AtlasJson.Deserialize<AlarmDefinition>(r.GetString(0));
+            if (d is not null) list.Add(d);
+        }
+        return list;
     }
 
     public async Task SaveDefinitionAsync(AlarmDefinition def, CancellationToken ct = default)
     {
-        await Task.CompletedTask;
+        using var conn = _store.OpenConnection();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = @"INSERT INTO AlarmDefinitions (Id, Json) VALUES ($id, $json)
+                            ON CONFLICT(Id) DO UPDATE SET Json = excluded.Json";
+        cmd.Parameters.AddWithValue("$id", def.Id.ToString());
+        cmd.Parameters.AddWithValue("$json", AtlasJson.Serialize(def));
+        await cmd.ExecuteNonQueryAsync(ct);
     }
 
     public async Task<IReadOnlyList<AlarmInstance>> GetActiveInstancesAsync(CancellationToken ct = default)
@@ -59,9 +74,10 @@ public sealed class SqliteAuditRepository : IAuditRepository
     {
         using var conn = _store.OpenConnection();
         using var cmd = conn.CreateCommand();
-        cmd.CommandText = "INSERT INTO AuditEvents (Id, Json) VALUES ($id, $json)";
+        cmd.CommandText = "INSERT INTO AuditEvents (Id, Json, TimestampUtc) VALUES ($id, $json, $ts)";
         cmd.Parameters.AddWithValue("$id", evt.Id.ToString());
         cmd.Parameters.AddWithValue("$json", AtlasJson.Serialize(evt));
+        cmd.Parameters.AddWithValue("$ts", evt.TimestampUtc.ToString("o"));
         await cmd.ExecuteNonQueryAsync(ct);
     }
 
@@ -69,7 +85,8 @@ public sealed class SqliteAuditRepository : IAuditRepository
     {
         using var conn = _store.OpenConnection();
         using var cmd = conn.CreateCommand();
-        cmd.CommandText = "SELECT Json FROM AuditEvents ORDER BY Json DESC LIMIT $n";
+        // Ordena por la columna real de timestamp (cronológico), no por el JSON literal.
+        cmd.CommandText = "SELECT Json FROM AuditEvents ORDER BY TimestampUtc DESC, Id DESC LIMIT $n";
         cmd.Parameters.AddWithValue("$n", count);
         var list = new List<AuditEvent>();
         await using var r = await cmd.ExecuteReaderAsync(ct);

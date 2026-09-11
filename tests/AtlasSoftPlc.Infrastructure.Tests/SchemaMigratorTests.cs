@@ -23,7 +23,7 @@ public sealed class SchemaMigratorTests
 
         // Las tablas principales existen
         using var conn = store.OpenConnection();
-        foreach (var table in new[] { "Projects", "Variables", "Devices", "LogicPrograms", "LogicProgramVersions", "AuditEvents", "HistorianSamples", "AlarmInstances", "Settings", "Users", "SchemaMigrations" })
+        foreach (var table in new[] { "Projects", "Variables", "Devices", "LogicPrograms", "LogicProgramVersions", "AuditEvents", "HistorianSamples", "AlarmInstances", "AlarmDefinitions", "Settings", "Users", "SchemaMigrations" })
         {
             using var cmd = conn.CreateCommand();
             cmd.CommandText = $"SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='{table}'";
@@ -45,7 +45,7 @@ public sealed class SchemaMigratorTests
         using var conn = store.OpenConnection();
         using var cmd = conn.CreateCommand();
         cmd.CommandText = "SELECT COUNT(*) FROM SchemaMigrations";
-        Assert.Equal(1L, cmd.ExecuteScalar()); // una sola fila de versión, sin duplicados
+        Assert.Equal(SchemaMigrator.LatestVersion, Convert.ToInt64(cmd.ExecuteScalar())); // una fila por versión, sin duplicados
     }
 
     [Fact]

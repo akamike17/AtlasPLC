@@ -209,12 +209,14 @@ public sealed class SimulationService
     {
         lock (_lock)
         {
+            // Estado REAL de salidas desde el runtime (ya no hardcodea false).
+            var realOutputs = _runtime.GetOutputs();
             var result = new Dictionary<string, object>();
             foreach (var v in _variables.Values.Where(x => x.Direction == VariableDirection.Output))
             {
-                // El snapshot real viene del runtime, pero usamos _memory como proxy
-                // Para el MVP, devolvemos el estado actual simulado
-                var val = false; // se actualiza vía SignalR en tiempo real
+                var val = realOutputs.TryGetValue(v.Id, out var rv) && rv.Value.HasValue
+                    ? rv.Value.AsBool()
+                    : false;
                 result[v.Id.ToString()] = new { id = v.Id, key = v.Key, displayName = v.DisplayName, value = val };
             }
             return result;

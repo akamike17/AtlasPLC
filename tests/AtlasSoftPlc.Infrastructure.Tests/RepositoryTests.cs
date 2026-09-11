@@ -141,11 +141,41 @@ public class SqliteAlarmRepositoryTests
     }
 
     [Fact]
-    public async Task SaveDefinitionAsync_NoOp()
+    public async Task SaveDefinitionAsync_Persiste_Y_Recupera()
     {
         using var db = new TestDb();
         var repo = new SqliteAlarmRepository(db.Store);
-        await repo.SaveDefinitionAsync(new AlarmDefinition { Id = Guid.NewGuid(), Name = "Test" });
+        var def = new AlarmDefinition
+        {
+            Id = Guid.NewGuid(),
+            Name = "Presión alta",
+            Message = "La presión supera el umbral",
+            Severity = AlarmSeverity.High,
+            RelatedVariableId = Guid.NewGuid(),
+        };
+
+        await repo.SaveDefinitionAsync(def);
+        var defs = await repo.GetDefinitionsAsync();
+
+        Assert.Single(defs);
+        Assert.Equal(def.Id, defs[0].Id);
+        Assert.Equal("Presión alta", defs[0].Name);
+        Assert.Equal(AlarmSeverity.High, defs[0].Severity);
+    }
+
+    [Fact]
+    public async Task SaveDefinitionAsync_ActualizaExistente_PorId()
+    {
+        using var db = new TestDb();
+        var repo = new SqliteAlarmRepository(db.Store);
+        var id = Guid.NewGuid();
+        await repo.SaveDefinitionAsync(new AlarmDefinition { Id = id, Name = "V1", Severity = AlarmSeverity.Info });
+        await repo.SaveDefinitionAsync(new AlarmDefinition { Id = id, Name = "V2", Severity = AlarmSeverity.Critical });
+
+        var defs = await repo.GetDefinitionsAsync();
+        Assert.Single(defs);
+        Assert.Equal("V2", defs[0].Name);
+        Assert.Equal(AlarmSeverity.Critical, defs[0].Severity);
     }
 }
 
@@ -196,6 +226,26 @@ public class SqliteAuditRepositoryTests
 
         var recent = await repo.GetRecentAsync(5);
         Assert.Equal(5, recent.Count);
+    }
+
+    [Fact]
+    public async Task GetRecentAsync_OrdenaPorFechaReal_NoPorJson()
+    {
+        using var db = new TestDb();
+        var repo = new SqliteAuditRepository(db.Store);
+
+        var viejo = new AuditEvent { Id = Guid.NewGuid(), User = "u1", Action = AuditEventType.Validation, EntityType = "X", Result = "Success", TimestampUtc = DateTime.UtcNow.AddHours(-5) };
+        var nuevo = new AuditEvent { Id = Guid.NewGuid(), User = "u2", Action = AuditEventType.Validation, EntityType = "X", Result = "Success", TimestampUtc = DateTime.UtcNow };
+
+        // Insertamos el más reciente PRIMERO para que cualquier orden por Id/Json falle.
+        await repo.AppendAsync(nuevo);
+        await repo.AppendAsync(viejo);
+
+        var recent = await repo.GetRecentAsync(10);
+
+        Assert.Equal(2, recent.Count);
+        Assert.Equal(nuevo.Id, recent[0].Id); // el más reciente primero (cronológico)
+        Assert.Equal(viejo.Id, recent[1].Id);
     }
 }
 
@@ -391,6 +441,74 @@ public class SqliteProjectRepositoryTests
 
         var byId = await repo.GetByIdAsync(id);
         Assert.Equal("Updated", byId!.Name);
+    }
+}
+
+public class SqliteVariableRepositoryTests
+{
+    [Fact]
+    public async Task SaveVariable_ConProjectId_RecuperaPorProyecto()
+    {
+        using var db = new TestDb();
+        var repo = new SqliteVariableRepository(db.Store);
+        var projA = Guid.NewGuid();
+        var projB = Guid.NewGuid();
+
+        var v1 = new VariableDefinition { Id = Guid.NewGuid(), ProjectId = projA, Key = "Low", DisplayName = "Nivel bajo", DataType = PlcDataType.Bool, Direction = VariableDirection.Input };
+        var v2 = new VariableDefinition { Id = Guid.NewGuid(), ProjectId = projB, Key = "Temp", DisplayName = "Temperatura", DataType = PlcDataType.Float, Direction = VariableDirection.Input };
+
+        await repo.SaveAsync(v1);
+        await repo.SaveAsync(v2);
+
+        var ofA = await repo.GetByProjectAsync(projA);
+        var ofB = await repo.GetByProjectAsync(projB);
+
+        Assert.Single(ofA);
+        Assert.Equal("Low", ofA[0].Key);
+        Assert.Single(ofB);
+        Assert.Equal("Temp", ofB[0].Key);
+    }
+
+    [Fact]
+    public async Task SaveVariable_SinProjectId_NoContaminaOtrosProyectos()
+    {
+        using var db = new TestDb();
+        var repo = new SqliteVariableRepository(db.Store);
+        var projA = Guid.NewGuid();
+
+        var v1 = new VariableDefinition { Id = Guid.NewGuid(), ProjectId = projA, Key = "Real", DisplayName = "Real", DataType = PlcDataType.Bool };
+        await repo.SaveAsync(v1);
+
+        // Otra variable en un proyecto distinto (B) no debe aparecer en A.
+        var ofA = await repo.GetByProjectAsync(projA);
+        Assert.Single(ofA);
+        Assert.Equal("Real", ofA[0].Key);
+    }
+}
+
+public class SqliteLogicProgramRepositoryTests
+{
+    [Fact]
+    public async Task SaveProgram_ConProjectId_RecuperaActivoPorProyecto()
+    {
+        using var db = new TestDb();
+        var repo = new SqliteLogicProgramRepository(db.Store);
+        var projA = Guid.NewGuid();
+        var projB = Guid.NewGuid();
+
+        var p1 = new LogicProgram { Id = Guid.NewGuid(), ProjectId = projA, Name = "Tanque A" };
+        var p2 = new LogicProgram { Id = Guid.NewGuid(), ProjectId = projB, Name = "Tanque B" };
+
+        await repo.SaveAsync(p1);
+        await repo.SaveAsync(p2);
+
+        var activeA = await repo.GetActiveAsync(projA);
+        var activeB = await repo.GetActiveAsync(projB);
+
+        Assert.NotNull(activeA);
+        Assert.Equal("Tanque A", activeA!.Name);
+        Assert.NotNull(activeB);
+        Assert.Equal("Tanque B", activeB!.Name);
     }
 }
 
