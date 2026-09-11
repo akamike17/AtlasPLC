@@ -8,11 +8,11 @@ namespace AtlasSoftPlc.Web.Tests;
 /// Pruebas de seguridad web (auditoría hostil): autorización, CSRF e IDOR.
 /// Usa cliente por test con aislamiento de cookies.
 /// </summary>
-public sealed class SecurityTests : IClassFixture<WebApplicationFactory<Program>>
+public sealed class SecurityTests : IClassFixture<AtlasWebFactory>
 {
-    private readonly WebApplicationFactory<Program> _factory;
+    private readonly AtlasWebFactory _factory;
 
-    public SecurityTests(WebApplicationFactory<Program> factory) => _factory = factory;
+    public SecurityTests(AtlasWebFactory factory) => _factory = factory;
 
     private HttpClient NewClient() => _factory.CreateClient(new WebApplicationFactoryClientOptions
     {

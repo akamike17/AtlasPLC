@@ -33,11 +33,21 @@ builder.Services.AddAuthorization(options =>
 });
 
 // ---- Persistencia SQLite (sección 45/60) ----
-var dataDir = builder.Environment.IsDevelopment()
-    ? Path.Combine(builder.Environment.ContentRootPath, "data")
-    : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "AtlasSoftPlc");
-var dbPath = Path.Combine(dataDir, "atlas.db");
-var sqliteStore = new SqliteStore(dbPath);
+// La BD vive SIEMPRE fuera del árbol de código (datos de runtime jamás en el repo).
+// Path por defecto: %LocalAppData%/AtlasSoftPlc/atlas.db. Override vía config:
+//   ConnectionStrings:Default (path completo a un .db) o DataDir (directorio).
+var dbPath = builder.Configuration["ConnectionStrings:Default"];
+if (string.IsNullOrWhiteSpace(dbPath))
+{
+    var dataDir = builder.Configuration["DataDir"];
+    if (string.IsNullOrWhiteSpace(dataDir))
+        dataDir = Path.Combine(
+            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            "AtlasSoftPlc");
+    dbPath = Path.Combine(dataDir, "atlas.db");
+}
+
+var sqliteStore = new SqliteStore(dbPath!);
 sqliteStore.EnsureCreated();
 
 builder.Services.AddSingleton(sqliteStore);

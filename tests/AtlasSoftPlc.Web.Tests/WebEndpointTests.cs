@@ -7,11 +7,11 @@ namespace AtlasSoftPlc.Web.Tests;
 /// <summary>
 /// Tests de los endpoints HTTP (autorizados) y controllers vía WebApplicationFactory.
 /// </summary>
-public sealed class WebEndpointTests : IClassFixture<WebApplicationFactory<Program>>
+public sealed class WebEndpointTests : IClassFixture<AtlasWebFactory>
 {
-    private readonly WebApplicationFactory<Program> _factory;
+    private readonly AtlasWebFactory _factory;
 
-    public WebEndpointTests(WebApplicationFactory<Program> factory) => _factory = factory;
+    public WebEndpointTests(AtlasWebFactory factory) => _factory = factory;
 
     private HttpClient NewClient() => _factory.CreateClient(new WebApplicationFactoryClientOptions
     {
