@@ -119,6 +119,15 @@ public sealed class SqliteHistorianRepository : IHistorianRepository
         }
         return list;
     }
+
+    public async Task<int> PruneOlderThanAsync(DateTime cutoff, CancellationToken ct = default)
+    {
+        using var conn = _store.OpenConnection();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "DELETE FROM HistorianSamples WHERE TimestampUtc < $cutoff";
+        cmd.Parameters.AddWithValue("$cutoff", cutoff.ToString("o"));
+        return await cmd.ExecuteNonQueryAsync(ct);
+    }
 }
 
 /// <summary>Repositorio SQLite de versiones de programa.</summary>

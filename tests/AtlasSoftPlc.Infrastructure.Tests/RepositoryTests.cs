@@ -255,6 +255,25 @@ public class SqliteHistorianRepositoryTests
         Assert.Single(results);
         Assert.Equal(var1, results[0].VariableId);
     }
+
+    [Fact]
+    public async Task PruneOlderThan_EliminaSoloAntiguas()
+    {
+        using var db = new TestDb();
+        var repo = new SqliteHistorianRepository(db.Store);
+        var varId = Guid.NewGuid();
+        var now = DateTime.UtcNow;
+
+        await repo.AppendAsync(new HistorianSample { Id = Guid.NewGuid(), VariableId = varId, TimestampUtc = now.AddDays(-40), Value = "old" });
+        await repo.AppendAsync(new HistorianSample { Id = Guid.NewGuid(), VariableId = varId, TimestampUtc = now, Value = "new" });
+
+        var pruned = await repo.PruneOlderThanAsync(now.AddDays(-30));
+
+        Assert.Equal(1, pruned);
+        var remaining = await repo.GetAsync(varId, now.AddDays(-60), now.AddDays(1));
+        Assert.Single(remaining);
+        Assert.Equal("new", remaining[0].Value);
+    }
 }
 
 public class SqliteProgramVersionRepositoryTests

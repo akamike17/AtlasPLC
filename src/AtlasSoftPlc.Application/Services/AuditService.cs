@@ -12,6 +12,8 @@ public interface IHistorianRepository
 {
     Task AppendAsync(HistorianSample sample, CancellationToken ct = default);
     Task<IReadOnlyList<HistorianSample>> GetAsync(Guid variableId, DateTime from, DateTime to, CancellationToken ct = default);
+    /// <summary>Poda muestras anteriores a <paramref name="cutoff"/> (retención por antigüedad).</summary>
+    Task<int> PruneOlderThanAsync(DateTime cutoff, CancellationToken ct = default);
 }
 
 /// <summary>Servicio de auditoría (sección 30/43).</summary>
@@ -50,4 +52,8 @@ public sealed class HistorianService
     public Task AppendAsync(HistorianSample sample, CancellationToken ct = default) => _repo.AppendAsync(sample, ct);
     public Task<IReadOnlyList<HistorianSample>> GetAsync(Guid variableId, DateTime from, DateTime to, CancellationToken ct = default)
         => _repo.GetAsync(variableId, from, to, ct);
+
+    /// <summary>Retención por antigüedad: poda las muestras más viejas que <paramref name="retentionDays"/> días.</summary>
+    public Task<int> PruneAsync(int retentionDays, DateTime? now = null, CancellationToken ct = default)
+        => _repo.PruneOlderThanAsync((now ?? DateTime.UtcNow).AddDays(-retentionDays), ct);
 }

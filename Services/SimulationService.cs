@@ -25,6 +25,10 @@ public sealed class SimulationService
     private readonly Dictionary<Guid, RuntimeValue> _inputValues = new();
     private readonly List<ScanTrace> _timeline = new();
 
+    // Retención del timeline en memoria: cap duro para evitar crecimiento ilimitado
+    // en un proceso 24/7 (memoria acotada). Se descartan las entradas más antiguas.
+    private const int TimelineCapacity = 1000;
+
     public sealed class ScanTrace
     {
         public DateTime Time { get; set; }
@@ -172,6 +176,7 @@ public sealed class SimulationService
                 ScanNumber = 0,
                 Description = $"Entrada '{name}' → {(value ? "ON" : "OFF")}"
             });
+            TrimTimeline();
 
             _runtime.SetInputs(_inputValues);
             _runtime.Post(new SetManualInputCommand(variableId, PlcValue.Bool(value)));
@@ -217,4 +222,10 @@ public sealed class SimulationService
     }
 
     public IReadOnlyList<ScanTrace> Timeline { get { lock (_lock) return _timeline.ToList(); } }
+
+    private void TrimTimeline()
+    {
+        if (_timeline.Count > TimelineCapacity)
+            _timeline.RemoveRange(0, _timeline.Count - TimelineCapacity);
+    }
 }
