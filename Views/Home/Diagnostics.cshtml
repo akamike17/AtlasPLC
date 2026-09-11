@@ -1,0 +1,40 @@
+@model AtlasSoftPlc.Web.Controllers.DashboardViewModel
+@{
+    ViewData["Title"] = "Diagnóstico";
+    var rt = Model.Runtime;
+    var stateClass = rt.State == AtlasSoftPlc.Domain.Runtime.RuntimeState.Running ? "text-success" : "text-danger";
+}
+
+<h2>Diagnóstico</h2>
+
+<div class="row g-4">
+    <div class="col-md-6">
+        <div class="card shadow-sm">
+            <div class="card-header bg-dark text-white">SCAN TIMING</div>
+            <div class="card-body">
+                <table class="table table-sm">
+                    <tr><td>Estado</td><td class="@stateClass fw-bold">● @rt.State</td></tr>
+                    <tr><td>Último scan</td><td>@rt.LastScanMs.ToString("F2") ms</td></tr>
+                    <tr><td>Promedio</td><td>@rt.AverageScanMs.ToString("F2") ms</td></tr>
+                    <tr><td>Máximo</td><td>@rt.MaxScanMs.ToString("F2") ms</td></tr>
+                    <tr><td>Mínimo</td><td>@rt.MinScanMs.ToString("F2") ms</td></tr>
+                    <tr><td>Overruns</td><td>@rt.Overruns</td></tr>
+                    <tr><td>Total scans</td><td>@rt.TotalScans</td></tr>
+                    <tr><td>Último completado</td><td>@(rt.LastCompletedUtc?.ToString("HH:mm:ss") ?? "—")</td></tr>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-md-6">
+        <div class="card shadow-sm">
+            <div class="card-header bg-dark text-white">PROGRAMA ACTIVO</div>
+            <div class="card-body">
+                <p><strong>Nombre:</strong> @(rt.ActiveProgramName ?? "—")</p>
+                <p><strong>Versión:</strong> @(rt.ActiveProgramVersion?.ToString() ?? "—")</p>
+                <p><strong>Hash:</strong> <code>@(rt.ActiveProgramHash ?? "—")</code></p>
+                <p><strong>Modo:</strong> @rt.Mode</p>
+            </div>
+        </div>
+    </div>
+</div>

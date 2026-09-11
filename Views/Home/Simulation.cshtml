@@ -1,0 +1,133 @@
+@model AtlasSoftPlc.Web.Controllers.DashboardViewModel
+@{
+    ViewData["Title"] = "Simulación";
+    var rt = Model.Runtime;
+}
+
+<h2>Simulación — @Model.Project.Name</h2>
+<p class="text-muted">Modo: @rt.Mode · Scan: @rt.LastScanMs.ToString("F1") ms · Scans: @rt.TotalScans</p>
+
+<div class="row g-4">
+    <div class="col-md-4">
+        <div class="card shadow-sm">
+            <div class="card-header bg-dark text-white">INPUTS</div>
+            <div class="card-body">
+                @foreach (var kv in Model.Inputs)
+                {
+                    var input = (dynamic)kv.Value;
+                    var isOn = (bool)input.value;
+                    <div class="d-flex justify-content-between align-items-center mb-2">
+                        <span>@input.displayName</span>
+                        <button class="btn btn-sm toggle-btn @(isOn ? "btn-success" : "btn-outline-secondary")"
+                                data-id="@input.id" data-value="@(isOn ? "false" : "true")">
+                            @(isOn ? "ON" : "OFF")
+                        </button>
+                    </div>
+                }
+            </div>
+        </div>
+    </div>
+
+    <div class="col-md-4">
+        <div class="card shadow-sm">
+            <div class="card-header bg-dark text-white">PROCESS</div>
+            <div class="card-body text-center py-5">
+                <div class="spinner-grow text-primary mb-3" role="status"></div>
+                <p class="text-muted">Ejecutando lógica determinista…</p>
+                <p class="small">Programa: @(rt.ActiveProgramName ?? "—") v@(rt.ActiveProgramVersion ?? 0)</p>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-md-4">
+        <div class="card shadow-sm">
+            <div class="card-header bg-dark text-white">OUTPUTS</div>
+            <div class="card-body" id="outputsPanel">
+                <p class="text-muted">Cargando salidas…</p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="card shadow-sm mt-4">
+    <div class="card-header bg-dark text-white">TIMELINE</div>
+    <div class="card-body" id="timeline" style="max-height:300px;overflow-y:auto;">
+        <p class="text-muted">Sin eventos todavía.</p>
+    </div>
+</div>
+
+@section Scripts {
+    <script>
+        // Mapa id → nombre legible de salidas (renderizado server-side).
+        const outputNames = {
+            @foreach (var kv in Model.Outputs)
+            {
+                <text>"@kv.Key": "@((dynamic)kv.Value).displayName",</text>
+            }
+        };
+
+        async function refreshOutputs() {
+            try {
+                const r = await fetch('/api/runtime/snapshot');
+                if (r.status === 401) { window.location = '/Account/Login'; return; }
+                const snap = await r.json();
+                const outputs = snap.outputs || {};
+                const panel = document.getElementById('outputsPanel');
+                const entries = Object.entries(outputs);
+                let html = '';
+                for (const [id, v] of entries) {
+                    const raw = v.value ? v.value.raw : false;
+                    const on = raw === true || raw === 'true' || raw === 1;
+                    const name = outputNames[id] || id.slice(0,8);
+                    html += `<div class="d-flex justify-content-between"><span>${name}</span><span class="badge ${on?'bg-success':'bg-secondary'}">${on?'ON':'OFF'}</span></div>`;
+                }
+                panel.innerHTML = html || '<p class="text-muted">Sin salidas.</p>';
+            } catch(e) { console.error('refreshOutputs:', e); }
+        }
+
+        async function refreshTimeline() {
+            try {
+                const r = await fetch('/api/runtime/timeline');
+                if (r.status === 401) { window.location = '/Account/Login'; return; }
+                const items = await r.json();
+                if (!items || items.length === 0) return;
+                const el = document.getElementById('timeline');
+                let html = '';
+                items.slice().reverse().forEach(it => {
+                    html += `<div class="small border-bottom py-1">[${new Date(it.time).toLocaleTimeString()}] ${it.description}</div>`;
+                });
+                el.innerHTML = html;
+            } catch(e) { console.error('refreshTimeline:', e); }
+        }
+
+        async function getCsrfToken() {
+            const r = await fetch('/api/runtime/antiforgery', { credentials: 'same-origin' });
+            if (!r.ok) throw new Error('No se pudo obtener token CSRF');
+            const d = await r.json();
+            return d.token;
+        }
+
+        document.querySelectorAll('.toggle-btn').forEach(btn => {
+            btn.addEventListener('click', async () => {
+                const id = btn.dataset.id;
+                const value = btn.dataset.value === 'true';
+                try {
+                    const token = await getCsrfToken();
+                    await fetch(`/api/runtime/inputs/${id}`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json', 'X-CSRF-TOKEN': token },
+                        body: JSON.stringify({ value })
+                    });
+                } catch (e) {
+                    console.error('Error al actualizar entrada:', e);
+                }
+                location.reload();
+            });
+        });
+
+        setInterval(refreshOutputs, 1500);
+        setInterval(refreshTimeline, 2000);
+        refreshOutputs();
+        refreshTimeline();
+    </script>
+}

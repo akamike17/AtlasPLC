@@ -1,0 +1,19 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/AtlasSoftPlc.Application/AtlasSoftPlc.Application.csproj" />
+    <Project Path="src/AtlasSoftPlc.Domain/AtlasSoftPlc.Domain.csproj" />
+    <Project Path="src/AtlasSoftPlc.Infrastructure/AtlasSoftPlc.Infrastructure.csproj" />
+    <Project Path="src/AtlasSoftPlc.Protocols.Modbus/AtlasSoftPlc.Protocols.Modbus.csproj" />
+    <Project Path="src/AtlasSoftPlc.Runtime/AtlasSoftPlc.Runtime.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/AtlasSoftPlc.Application.Tests/AtlasSoftPlc.Application.Tests.csproj" />
+    <Project Path="tests/AtlasSoftPlc.Domain.Tests/AtlasSoftPlc.Domain.Tests.csproj" />
+    <Project Path="tests/AtlasSoftPlc.Infrastructure.Tests/AtlasSoftPlc.Infrastructure.Tests.csproj" />
+    <Project Path="tests/AtlasSoftPlc.IntegrationTests/AtlasSoftPlc.IntegrationTests.csproj" />
+    <Project Path="tests/AtlasSoftPlc.Protocols.Modbus.Tests/AtlasSoftPlc.Protocols.Modbus.Tests.csproj" />
+    <Project Path="tests/AtlasSoftPlc.Runtime.Tests/AtlasSoftPlc.Runtime.Tests.csproj" />
+    <Project Path="tests/AtlasSoftPlc.Web.Tests/AtlasSoftPlc.Web.Tests.csproj" />
+  </Folder>
+  <Project Path="AtlasSoftPlc.Web.csproj" />
+</Solution>

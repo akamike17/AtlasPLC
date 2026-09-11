@@ -1,0 +1,334 @@
+using System.Diagnostics;
+using AtlasSoftPlc.Domain.Common;
+using AtlasSoftPlc.Domain.Logic;
+using AtlasSoftPlc.Domain.Runtime;
+using AtlasSoftPlc.Domain.Values;
+using AtlasSoftPlc.Domain.Variables;
+using AtlasSoftPlc.Runtime.Engine;
+using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
+
+namespace AtlasSoftPlc.Runtime.Hosting;
+
+/// <summary>
+/// Servicio de runtime del scan (sección 10). BackgroundService que ejecuta
+/// el ciclo de scan de forma single-writer. Nunca desde un Controller MVC.
+/// </summary>
+public sealed class PlcRuntimeService : BackgroundService
+{
+    private readonly ILogger<PlcRuntimeService> _logger;
+    private readonly RuntimeStateStore _store;
+    private readonly WatchdogService _watchdog;
+    private readonly IRuntimeNotifier _notifier;
+    private readonly ScanCoordinator _coordinator = new();
+    private readonly System.Threading.Channels.Channel<RuntimeCommand> _commands =
+        System.Threading.Channels.Channel.CreateUnbounded<RuntimeCommand>();
+
+    private readonly Stopwatch _monotonic = new();
+    private readonly Stopwatch _scanWatch = new();
+
+    private LogicProgram? _activeProgram;
+    private string? _activeProgramHash;
+    private IReadOnlyDictionary<Guid, VariableDefinition> _definitions = new Dictionary<Guid, VariableDefinition>();
+    private Dictionary<Guid, RuntimeValue> _inputs = new();
+    private Dictionary<Guid, RuntimeValue> _memory = new();
+    private IReadOnlyCollection<Interlock> _interlocks = new List<Interlock>();
+    private Dictionary<Guid, PlcValue> _failsafeValues = new();
+    private Dictionary<Guid, PlcDataType> _outputTypes = new();
+    private Dictionary<Guid, bool> _forcedOutputs = new();
+
+    private RuntimeState _state = RuntimeState.Stopped;
+    private RuntimeMode _mode = RuntimeMode.Simulation;
+
+    private double _targetScanMs = 50;
+    private double _avgScanMs;
+    private double _maxScanMs = double.MinValue;
+    private double _minScanMs = double.MaxValue;
+    private long _overruns;
+    private long _totalScans;
+    private DateTime? _lastCompleted;
+
+    private IReadOnlyDictionary<Guid, RuntimeValue> _lastInputs = new Dictionary<Guid, RuntimeValue>();
+    private IReadOnlyDictionary<Guid, RuntimeValue> _lastOutputs = new Dictionary<Guid, RuntimeValue>();
+
+    public PlcRuntimeService(
+        ILogger<PlcRuntimeService> logger,
+        RuntimeStateStore store,
+        WatchdogService watchdog,
+        IRuntimeNotifier notifier)
+    {
+        _logger = logger;
+        _store = store;
+        _watchdog = watchdog;
+        _notifier = notifier;
+    }
+
+    public System.Threading.Channels.Channel<RuntimeCommand> Commands => _commands;
+
+    public bool Post(RuntimeCommand command) => _commands.Writer.TryWrite(command);
+
+    /// <summary>Instala la configuración de un programa (validada externamente) de forma atómica.</summary>
+    public void InstallConfiguration(
+        LogicProgram program,
+        IReadOnlyDictionary<Guid, VariableDefinition> definitions,
+        IReadOnlyCollection<Interlock> interlocks,
+        IReadOnlyDictionary<Guid, PlcValue> failsafeValues)
+    {
+        // atomic swap (sección 48): construimos todo nuevo y lo intercambiamos
+        var newProgram = program;
+        var newDefs = definitions;
+        var newInterlocks = interlocks;
+        var newFailsafe = failsafeValues;
+
+        var outputTypes = new Dictionary<Guid, PlcDataType>();
+        foreach (var d in newDefs.Values)
+            if (d.Direction == VariableDirection.Output)
+                outputTypes[d.Id] = d.DataType;
+
+        // swap atómico bajo lock del store
+        _store.Update(m => { });
+        lock (_coordinator)
+        {
+            _activeProgram = newProgram;
+            _activeProgramHash = ComputeProgramHash(newProgram);
+            _definitions = newDefs;
+            _interlocks = newInterlocks;
+            _failsafeValues = new Dictionary<Guid, PlcValue>(newFailsafe);
+            _outputTypes = outputTypes;
+            _memory = new Dictionary<Guid, RuntimeValue>();
+            _inputs = new Dictionary<Guid, RuntimeValue>();
+            _forcedOutputs = new Dictionary<Guid, bool>();
+        }
+
+        _logger.LogInformation("Configuración instalada: {Program} v{Version}", newProgram.Name, newProgram.Version);
+    }
+
+    public void SetInputs(IReadOnlyDictionary<Guid, RuntimeValue> inputs)
+    {
+        lock (_coordinator)
+        {
+            foreach (var kv in inputs)
+                _inputs[kv.Key] = kv.Value;
+        }
+    }
+
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
+    {
+        _logger.LogInformation("PlcRuntimeService iniciando");
+        _monotonic.Start();
+        _scanWatch.Start();
+        _state = RuntimeState.Stopped;
+
+        // detectar shutdown sucio (sección 86): si hay un flag previo, marcarlo
+        // (persistencia real del flag se implementa en Infrastructure).
+
+        using var timer = new PeriodicTimer(TimeSpan.FromMilliseconds(_targetScanMs));
+        try
+        {
+            while (!stoppingToken.IsCancellationRequested)
+            {
+                // procesar comandos
+                while (_commands.Reader.TryRead(out var cmd))
+                    await ProcessCommand(cmd, stoppingToken);
+
+                if (_state == RuntimeState.Running)
+                {
+                    RunScan();
+                }
+
+                _watchdog.Heartbeat();
+                await timer.WaitForNextTickAsync(stoppingToken);
+            }
+        }
+        catch (OperationCanceledException)
+        {
+            // shutdown normal
+        }
+
+        await ShutdownAsync();
+    }
+
+    private void RunScan()
+    {
+        var deltaMs = _monotonic.Elapsed.TotalMilliseconds;
+        _monotonic.Restart();
+
+        _scanWatch.Restart();
+        try
+        {
+            if (_activeProgram is null)
+                return;
+
+            lock (_coordinator)
+            {
+                var snapshotInputs = new Dictionary<Guid, RuntimeValue>(_inputs);
+                var request = ScanRequest.Create(
+                    _activeProgram,
+                    _definitions,
+                    snapshotInputs,
+                    _memory,
+                    _interlocks,
+                    _failsafeValues,
+                    _outputTypes,
+                    deltaMs);
+                var result = _coordinator.Scan(request);
+
+                _memory = result.Memory.Values.ToDictionary(k => k.Key, v => new RuntimeValue
+                {
+                    VariableId = v.Value.VariableId,
+                    Value = v.Value.Value,
+                    Quality = v.Value.Quality,
+                    Source = v.Value.Source,
+                    TimestampUtc = v.Value.TimestampUtc,
+                    SequenceNumber = v.Value.SequenceNumber
+                });
+
+                _lastInputs = result.Inputs.Values;
+                _lastOutputs = result.Outputs.Values;
+
+                // Notificar cambios de salida individual
+                foreach (var outKv in result.Outputs.Values)
+                {
+                    _ = _notifier.NotifyOutputChangedAsync(outKv.Key, outKv.Value.Value);
+                }
+
+                _totalScans++;
+                _lastCompleted = DateTime.UtcNow;
+            }
+
+            _scanWatch.Stop();
+            var elapsedMs = _scanWatch.Elapsed.TotalMilliseconds;
+            UpdateMetrics(elapsedMs);
+        }
+        catch (Exception ex)
+        {
+            _scanWatch.Stop();
+            _logger.LogError(ex, "Error en el scan");
+            _state = RuntimeState.Faulted;
+            UpdateMetrics(_scanWatch.Elapsed.TotalMilliseconds);
+        }
+    }
+
+    private void UpdateMetrics(double elapsedMs)
+    {
+        _avgScanMs = _avgScanMs == 0 ? elapsedMs : (_avgScanMs * 0.9 + elapsedMs * 0.1);
+        _maxScanMs = Math.Max(_maxScanMs, elapsedMs);
+        _minScanMs = _minScanMs == double.MaxValue ? elapsedMs : Math.Min(_minScanMs, elapsedMs);
+        if (elapsedMs > _targetScanMs) _overruns++;
+
+        _store.Update(m =>
+        {
+            m.State = _state;
+            m.Mode = _mode;
+            m.ActiveProgramName = _activeProgram?.Name;
+            m.ActiveProgramHash = _activeProgramHash;
+            m.ActiveProgramVersion = _activeProgram?.Version;
+            m.ScanNumber = _totalScans;
+            m.LastScanMs = elapsedMs;
+            m.AverageScanMs = _avgScanMs;
+            m.MaxScanMs = _maxScanMs;
+            m.MinScanMs = _minScanMs;
+            m.Overruns = _overruns;
+            m.TotalScans = _totalScans;
+            m.LastCompletedUtc = _lastCompleted;
+            m.Inputs = _lastInputs;
+            m.Outputs = _lastOutputs;
+        });
+
+        // Notificar snapshot completo a SignalR (cada scan)
+        _ = _notifier.NotifySnapshotAsync(MapToDto(_store.Snapshot));
+    }
+
+    private static RuntimeSnapshotDto MapToDto(RuntimeSnapshot s) => new()
+    {
+        State = s.State,
+        Mode = s.Mode,
+        ActiveProgramName = s.ActiveProgramName,
+        ActiveProgramHash = s.ActiveProgramHash,
+        ActiveProgramVersion = s.ActiveProgramVersion ?? 0,
+        ScanNumber = s.ScanNumber,
+        LastScanMs = s.LastScanMs,
+        AverageScanMs = s.AverageScanMs,
+        MaxScanMs = s.MaxScanMs,
+        MinScanMs = s.MinScanMs,
+        Overruns = s.Overruns,
+        TotalScans = s.TotalScans,
+        LastCompletedUtc = s.LastCompletedUtc,
+        Inputs = s.Inputs.ToDictionary(k => k.Key, v => v.Value),
+        Outputs = s.Outputs.ToDictionary(k => k.Key, v => v.Value)
+    };
+
+    /// <summary>Calcula un hash SHA-256 determinista de la configuración del programa activo.</summary>
+    private static string ComputeProgramHash(LogicProgram program)
+    {
+        // Hash determinista basado en nombre, versión y reglas (para el MVP, suficiente
+        // para verificar integridad de la configuración instalada).
+        using var sha = System.Security.Cryptography.SHA256.Create();
+        var sb = new System.Text.StringBuilder();
+        sb.Append(program.Name).Append('|').Append(program.Version).Append('|').Append(program.Rules.Count);
+        foreach (var rule in program.Rules.OrderBy(r => r.Id))
+            sb.Append('|').Append(rule.Id).Append(':').Append(rule.Name).Append(':').Append(rule.Priority);
+        var bytes = sha.ComputeHash(System.Text.Encoding.UTF8.GetBytes(sb.ToString()));
+        return Convert.ToHexString(bytes).ToLowerInvariant();
+    }
+
+    private async Task ProcessCommand(RuntimeCommand cmd, CancellationToken ct)
+    {
+        var previousState = _state;
+        switch (cmd)
+        {
+            case ActivateProgramCommand a:
+                InstallConfiguration(a.Program, _definitions, _interlocks, _failsafeValues);
+                _state = RuntimeState.Running;
+                break;
+            case PauseCommand:
+                _state = RuntimeState.Stopped;
+                // failsafe outputs en shutdown real
+                break;
+            case ResumeCommand:
+                if (_activeProgram is not null) _state = RuntimeState.Running;
+                break;
+            case StopCommand:
+                _state = RuntimeState.Stopped;
+                break;
+            case SetManualInputCommand m:
+                SetInputs(new Dictionary<Guid, RuntimeValue>
+                {
+                    [m.VariableId] = new RuntimeValue
+                    {
+                        VariableId = m.VariableId,
+                        Value = m.Value,
+                        Quality = Quality.Simulated,
+                        Source = ValueSource.Manual,
+                        TimestampUtc = DateTime.UtcNow
+                    }
+                });
+                // Notificar cambio de input
+                _ = _notifier.NotifyInputChangedAsync(m.VariableId, m.Value);
+                break;
+            case ForceOutputCommand f:
+                lock (_coordinator) _forcedOutputs[f.VariableId] = true;
+                break;
+            case ClearForceCommand c:
+                lock (_coordinator) _forcedOutputs.Remove(c.VariableId);
+                break;
+            case SetRuntimeModeCommand mode:
+                _mode = mode.Mode;
+                break;
+        }
+
+        // Notificar cambio de estado si cambió
+        if (previousState != _state)
+        {
+            _ = _notifier.NotifyStateChangedAsync(_state);
+        }
+        await Task.CompletedTask;
+    }
+
+    private async Task ShutdownAsync()
+    {
+        _state = RuntimeState.Stopped;
+        _logger.LogInformation("PlcRuntimeService detenido");
+        await Task.CompletedTask;
+    }
+}

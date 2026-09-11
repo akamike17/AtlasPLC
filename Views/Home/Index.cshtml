@@ -1,0 +1,434 @@
+﻿@model AtlasSoftPlc.Web.Controllers.DashboardViewModel
+@{
+    ViewData["Title"] = "Dashboard";
+    var rt = Model.Runtime;
+    var stateClass = rt.State switch
+    {
+        AtlasSoftPlc.Domain.Runtime.RuntimeState.Running => "text-success",
+        AtlasSoftPlc.Domain.Runtime.RuntimeState.Stopped => "text-secondary",
+        AtlasSoftPlc.Domain.Runtime.RuntimeState.Faulted => "text-danger",
+        AtlasSoftPlc.Domain.Runtime.RuntimeState.Emergency => "text-danger",
+        AtlasSoftPlc.Domain.Runtime.RuntimeState.Degraded => "text-warning",
+        _ => "text-secondary"
+    };
+    var stateLabel = rt.State switch
+    {
+        AtlasSoftPlc.Domain.Runtime.RuntimeState.Running => "RUNNING",
+        AtlasSoftPlc.Domain.Runtime.RuntimeState.Stopped => "STOPPED",
+        AtlasSoftPlc.Domain.Runtime.RuntimeState.Faulted => "FAULTED",
+        AtlasSoftPlc.Domain.Runtime.RuntimeState.Emergency => "EMERGENCY",
+        AtlasSoftPlc.Domain.Runtime.RuntimeState.Degraded => "DEGRADED",
+        _ => rt.State.ToString().ToUpperInvariant()
+    };
+}
+
+<div class="row g-3 mb-4">
+    <!-- OVERVIEW ISA-101: big picture at a glance -->
+    <div class="col-12 col-lg-4">
+        <div class="card h-100 shadow-sm border-0">
+            <div class="card-header bg-dark text-white d-flex justify-content-between align-items-center">
+                <span>OVERVIEW</span>
+                <span class="badge @stateClass fs-6">@stateLabel</span>
+            </div>
+            <div class="card-body p-3">
+                <div class="row g-2 text-center">
+                    <div class="col-6">
+                        <div class="display-6 text-muted">@rt.TotalScans</div>
+                        <div class="small text-muted">Scans totales</div>
+                    </div>
+                    <div class="col-6">
+                        <div class="display-6 text-muted">@rt.LastScanMs.ToString("F1") ms</div>
+                        <div class="small text-muted">Último scan</div>
+                    </div>
+                    <div class="col-6">
+                        <div class="display-6 @(rt.Overruns > 0 ? "text-danger" : "text-muted")">@rt.Overruns</div>
+                        <div class="small text-muted">Overruns</div>
+                    </div>
+                    <div class="col-6">
+                        <div class="display-6 text-muted">@rt.AverageScanMs.ToString("F1") ms</div>
+                        <div class="small text-muted">Promedio</div>
+                    </div>
+                </div>
+                <hr class="my-2" />
+                <div class="small text-muted">
+                    Programa: <strong>@(rt.ActiveProgramName ?? "—")</strong> v@(rt.ActiveProgramVersion ?? 0)<br />
+                    Modo: <strong>@rt.Mode</strong>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- ALARMA PRINCIPAL: E-Stop siempre visible si está activo -->
+    <div class="col-12 col-lg-4">
+        @{
+            var estopInput = Model.Inputs.Values
+                            .Cast<dynamic>()
+                            .FirstOrDefault(i => i.key == "EmergencyStop");
+                        var estopOn = estopInput is not null && (bool)estopInput.value;
+        }
+        <div class="card h-100 shadow-sm @(estopOn ? "border-danger" : "border-0")"
+             style="@(estopOn ? "box-shadow: 0 0 0 2px #dc3545;" : "")">
+            <div class="card-header @(estopOn ? "bg-danger text-white" : "bg-dark text-white")">
+                <span class="fs-5 fw-bold">⛔ PARO DE EMERGENCIA</span>
+            </div>
+            <div class="card-body d-flex flex-column justify-content-center align-items-center">
+                <div class="display-1 @(estopOn ? "text-danger" : "text-success")">
+                    @(estopOn ? "ACTIVADO" : "NORMAL")
+                </div>
+                <div class="small text-muted mt-2">
+                    @(estopOn ? "Todas las salidas forzadas a seguro (failsafe)." : "Sistema operativo.")
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- CONTROLES RÁPIDOS -->
+    <div class="col-12 col-lg-4">
+        <div class="card h-100 shadow-sm border-0">
+            <div class="card-header bg-dark text-white">CONTROL RÁPIDO</div>
+            <div class="card-body d-grid gap-2">
+                @if (rt.State == AtlasSoftPlc.Domain.Runtime.RuntimeState.Running)
+                {
+                    <form asp-controller="Runtime" asp-action="Stop" method="post" id="stopForm">
+                        <button type="submit" class="btn btn-lg btn-outline-danger" onclick="return postJson(this, '/api/runtime/stop')">
+                            ⏹ Detener Runtime
+                        </button>
+                    </form>
+                }
+                else
+                {
+                    <form asp-controller="Runtime" asp-action="Start" method="post" id="startForm">
+                        <button type="submit" class="btn btn-lg btn-outline-success" onclick="return postJson(this, '/api/runtime/start')">
+                            ▶ Iniciar Runtime
+                        </button>
+                    </form>
+                }
+                <a asp-controller="Home" asp-action="Simulation" class="btn btn-lg btn-outline-primary">Simulación completa</a>
+                <a asp-controller="Home" asp-action="Diagnostics" class="btn btn-lg btn-outline-secondary">Diagnóstico</a>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- ENTRADAS Y SALIDAS: nombres legibles, colores ISA-101 -->
+<div class="row g-3">
+    <div class="col-12 col-lg-6">
+        <div class="card h-100 shadow-sm border-0">
+            <div class="card-header bg-dark text-white">ENTRADAS (Sensores / Interruptores)</div>
+            <div class="card-body p-0">
+                <table class="table table-sm mb-0" id="inputsTable">
+                    <thead class="table-dark">
+                        <tr><th>Variable</th><th style="width: 120px;">Estado</th><th style="width: 140px;">Acción</th></tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var kv in Model.Inputs)
+                        {
+                            var input = (dynamic)kv.Value;
+                            var isOn = (bool)input.value;
+                            var isEstop = (string)input.key == "EmergencyStop";
+                            <tr data-id="@input.id" class="@(isEstop ? "table-warning" : "")">
+                                <td class="@(isEstop ? "fw-bold" : "")">@input.displayName</td>
+                                <td>
+                                    <span class="badge @(isOn ? "bg-success" : "bg-secondary") fs-6 px-3 py-2">
+                                        @(isOn ? "ON" : "OFF")
+                                    </span>
+                                </td>
+                                <td>
+                                    <button class="btn btn-sm @(isOn ? "btn-outline-secondary" : "btn-outline-primary") toggle-input"
+                                            data-id="@input.id" data-value="@(!isOn)">
+                                        @(isOn ? "Apagar" : "Encender")
+                                    </button>
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <div class="col-12 col-lg-6">
+        <div class="card h-100 shadow-sm border-0">
+            <div class="card-header bg-dark text-white">SALIDAS (Actuadores)</div>
+            <div class="card-body p-0">
+                <table class="table table-sm mb-0" id="outputsTable">
+                    <thead class="table-dark">
+                        <tr><th>Variable</th><th style="width: 120px;">Estado</th><th style="width: 140px;">Por qué</th></tr>
+                    </thead>
+                    <tbody id="outputsBody">
+                        @foreach (var kv in Model.Outputs)
+                        {
+                            var output = (dynamic)kv.Value;
+                            var isOn = (bool)output.value;
+                            <tr data-id="@output.id">
+                                <td>@output.displayName</td>
+                                <td>
+                                    <span class="badge @(isOn ? "bg-success" : "bg-secondary") fs-6 px-3 py-2">
+                                        @(isOn ? "ON" : "OFF")
+                                    </span>
+                                </td>
+                                <td>
+                                    <button class="btn btn-sm btn-link p-0 text-decoration-none explain-btn"
+                                            data-id="@output.id" data-name="@output.displayName">
+                                        <small class="text-muted">¿Por qué?</small>
+                                    </button>
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+                <div id="outputsEmpty" class="p-3 text-center text-muted d-none">
+                    Sin salidas activas en el programa actual.
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- MODAL EXPLICACIÓN DINÁMICA -->
+<div class="modal fade" id="explainModal" tabindex="-1" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header bg-dark text-white">
+                <h5 class="modal-title">Explicación: <span id="explainVarName"></span></h5>
+                <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div id="explainLoading" class="text-center text-muted py-3">Cargando...</div>
+                <div id="explainContent" class="d-none">
+                    <ul id="explainReasons" class="mb-0"></ul>
+                </div>
+                <div id="explainNone" class="alert alert-light border d-none">
+                    No hay reglas activas que escriban esta salida en este momento.
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+@section Scripts {
+    <script src="~/lib/microsoft/signalr/dist/browser/signalr.min.js" asp-append-version="true"></script>
+    <script>
+        // ─── Config ───
+                const stateMap = {
+                    0: 'Starting', 1: 'Running', 2: 'Degraded',
+                    3: 'Faulted', 4: 'Stopped', 5: 'Emergency'
+                };
+
+                // Mapa id → nombre legible de salidas/entradas (renderizado server-side).
+                const outputNames = {
+                    @foreach (var kv in Model.Outputs)
+                    {
+                        <text>"@kv.Key": "@((dynamic)kv.Value).displayName",</text>
+                    }
+                };
+                const inputNames = {
+                    @foreach (var kv in Model.Inputs)
+                    {
+                        <text>"@kv.Key": "@((dynamic)kv.Value).displayName",</text>
+                    }
+                };
+
+        // ─── SignalR Connection ───
+        const connection = new signalR.HubConnectionBuilder()
+            .withUrl("/hubs/runtime")
+            .withAutomaticReconnect()
+            .build();
+
+        connection.on("RuntimeSnapshot", snap => applySnapshot(snap));
+        connection.on("OutputChanged", ({ id, value }) => updateOutputRow(id, value));
+        connection.on("InputChanged", ({ id, value }) => updateInputRow(id, value));
+
+        connection.start().catch(err => console.error("SignalR error:", err));
+
+        // ─── Antiforgery ───
+        let csrfToken = null;
+        async function getCsrfToken() {
+            if (csrfToken) return csrfToken;
+            const r = await fetch('/api/runtime/antiforgery', { credentials: 'same-origin' });
+            if (!r.ok) throw new Error('No se pudo obtener token CSRF');
+            const d = await r.json();
+            csrfToken = d.token;
+            return csrfToken;
+        }
+
+        async function postJson(url, body) {
+            const token = await getCsrfToken();
+            const resp = await fetch(url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json', 'X-CSRF-TOKEN': token },
+                credentials: 'same-origin',
+                body: JSON.stringify(body)
+            });
+            if (resp.status === 401) { window.location = '/Account/Login'; return null; }
+            if (!resp.ok) {
+                const err = await resp.json().catch(() => ({}));
+                throw new Error(err.error || ('HTTP ' + resp.status));
+            }
+            return resp;
+        }
+
+        // ─── Aplicar snapshot completo ───
+        function applySnapshot(snap) {
+            // Estado runtime
+            const stateEl = document.querySelector('.badge.fs-6');
+            if (stateEl && snap.state !== undefined) {
+                stateEl.className = 'badge fs-6 ' + (snap.state === 1 ? 'text-success' :
+                    snap.state === 4 ? 'text-secondary' :
+                    snap.state === 3 || snap.state === 5 ? 'text-danger' :
+                    snap.state === 2 ? 'text-warning' : 'text-secondary');
+                stateEl.textContent = stateMap[snap.state] ?? 'UNKNOWN';
+            }
+
+            // Entradas
+            if (snap.inputs) {
+                for (const [id, v] of Object.entries(snap.inputs)) {
+                    updateInputRow(id, v.value?.raw ?? false);
+                }
+            }
+
+            // Salidas
+            if (snap.outputs) {
+                const tbody = document.getElementById('outputsBody');
+                const empty = document.getElementById('outputsEmpty');
+                const entries = Object.entries(snap.outputs);
+                if (entries.length === 0) {
+                    tbody.innerHTML = '';
+                    empty.classList.remove('d-none');
+                } else {
+                    empty.classList.add('d-none');
+                    for (const [id, v] of entries) {
+                        const on = v.value && (v.value.raw === true || v.value.raw === 'true' || v.value.raw === 1);
+                        let row = tbody.querySelector(`tr[data-id="${id}"]`);
+                        if (!row) {
+                            // Si no existe en el DOM (output nuevo), lo creamos
+                            row = document.createElement('tr');
+                                                        row.dataset.id = id;
+                                                        const outName = outputNames[id] || id.slice(0,8);
+                                                        row.innerHTML = `
+                                                            <td>${outName}</td>
+                                                            <td><span class="badge ${on ? 'bg-success' : 'bg-secondary'} fs-6 px-3 py-2">${on ? 'ON' : 'OFF'}</span></td>
+                                                            <td><button class="btn btn-sm btn-link p-0 text-decoration-none explain-btn" data-id="${id}" data-name="${outName}"><small class="text-muted">¿Por qué?</small></button></td>
+                                                        `;
+                                                        tbody.appendChild(row);
+                        } else {
+                            const badge = row.querySelector('span.badge');
+                            if (badge) {
+                                badge.className = 'badge ' + (on ? 'bg-success' : 'bg-secondary') + ' fs-6 px-3 py-2';
+                                badge.textContent = on ? 'ON' : 'OFF';
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        function updateInputRow(id, value) {
+                    const row = document.querySelector(`#inputsTable tr[data-id="${id}"]`);
+                    if (!row) return;
+                    // value puede ser un bool crudo (desde applySnapshot) o un objeto PlcValue (desde InputChanged).
+                    const raw = (value !== null && typeof value === 'object') ? value.raw : value;
+                    const on = raw === true || raw === 'true' || raw === 1;
+                    const badge = row.querySelector('span.badge');
+                    if (badge) {
+                        badge.className = 'badge ' + (on ? 'bg-success' : 'bg-secondary') + ' fs-6 px-3 py-2';
+                        badge.textContent = on ? 'ON' : 'OFF';
+                    }
+                    const btn = row.querySelector('.toggle-input');
+                    if (btn) {
+                        btn.className = 'btn btn-sm ' + (on ? 'btn-outline-secondary' : 'btn-outline-primary') + ' toggle-input';
+                        btn.dataset.value = (!on).toString();
+                        btn.textContent = on ? 'Apagar' : 'Encender';
+                    }
+                }
+
+        function updateOutputRow(id, value) {
+            const on = value?.raw === true || value?.raw === 'true' || value?.raw === 1;
+            const row = document.querySelector(`#outputsBody tr[data-id="${id}"]`);
+            if (!row) return;
+            const badge = row.querySelector('span.badge');
+            if (badge) {
+                badge.className = 'badge ' + (on ? 'bg-success' : 'bg-secondary') + ' fs-6 px-3 py-2';
+                badge.textContent = on ? 'ON' : 'OFF';
+            }
+        }
+
+        // ─── Entradas: toggle ───
+        document.querySelectorAll('.toggle-input').forEach(btn => {
+            btn.addEventListener('click', async () => {
+                const id = btn.dataset.id;
+                const value = btn.dataset.value === 'true';
+                try {
+                    const resp = await postJson(`/api/runtime/inputs/${id}`, { value });
+                    if (resp) {
+                        // UI se actualiza via SignalR
+                    }
+                } catch (e) {
+                    alert('Error: ' + e.message);
+                }
+            });
+        });
+
+        // ─── Salidas: ¿Por qué? ───
+        document.querySelectorAll('.explain-btn').forEach(btn => {
+            btn.addEventListener('click', async () => {
+                const id = btn.dataset.id;
+                const name = btn.dataset.name;
+                const modal = new bootstrap.Modal(document.getElementById('explainModal'));
+                document.getElementById('explainVarName').textContent = name;
+                document.getElementById('explainLoading').classList.remove('d-none');
+                document.getElementById('explainContent').classList.add('d-none');
+                document.getElementById('explainNone').classList.add('d-none');
+                document.getElementById('explainReasons').innerHTML = '';
+                modal.show();
+
+                try {
+                    const r = await fetch(`/api/explainer/output/${id}`, { credentials: 'same-origin' });
+                    if (r.status === 401) { window.location = '/Account/Login'; return; }
+                    if (!r.ok) throw new Error('HTTP ' + r.status);
+                    const data = await r.json();
+
+                    document.getElementById('explainLoading').classList.add('d-none');
+                    if (data.reasons?.length > 0) {
+                        const ul = document.getElementById('explainReasons');
+                        data.reasons.forEach(r => {
+                            const li = document.createElement('li');
+                            li.className = 'mb-2';
+                            li.textContent = r;
+                            ul.appendChild(li);
+                        });
+                        document.getElementById('explainContent').classList.remove('d-none');
+                    } else {
+                        document.getElementById('explainNone').classList.remove('d-none');
+                    }
+                } catch (e) {
+                    document.getElementById('explainLoading').classList.add('d-none');
+                    document.getElementById('explainNone').classList.remove('d-none');
+                    document.getElementById('explainNone').textContent = 'Error: ' + e.message;
+                }
+            });
+        });
+
+        // ─── Control rápido: stop/start via SignalR (POST + antiforgery) ───
+        async function postJsonForm(form, url) {
+            const token = await getCsrfToken();
+            const fd = new FormData(form);
+            // no body JSON, form submit normal con antiforgery ya en la page
+            const resp = await fetch(url, {
+                method: 'POST',
+                headers: { 'X-CSRF-TOKEN': token },
+                credentials: 'same-origin',
+                body: fd
+            });
+            if (resp.status === 401) { window.location = '/Account/Login'; return; }
+            if (!resp.ok) alert('Error: ' + resp.status);
+        }
+
+        document.getElementById('stopForm')?.addEventListener('submit', e => {
+            e.preventDefault(); postJsonForm(e.target, '/api/runtime/stop');
+        });
+        document.getElementById('startForm')?.addEventListener('submit', e => {
+            e.preventDefault(); postJsonForm(e.target, '/api/runtime/start');
+        });
+    </script>
+}
