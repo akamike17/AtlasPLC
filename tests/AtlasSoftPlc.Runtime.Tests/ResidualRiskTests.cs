@@ -274,44 +274,103 @@ public class ResidualRiskTests
         {
             releaseLock.Set(); // liberar para que holder termine
             await holder;
-            await svc.StopAsync(CancellationToken.None);
         }
+
+        // IMPORTANTE (race del scan tardío): al liberar el lock, el scan viejo que estaba
+        // suspendido completa. NO debe sobrescribir los failsafe ni revivir el watchdog.
+        await Task.Delay(400); // margen razonable para que el scan tardío complete
+
+        Assert.Equal(RuntimeState.Faulted, store.Snapshot.State);
+        Assert.True(store.Snapshot.Outputs.TryGetValue(motor, out var after), "output sigue presente");
+        Assert.False(after.Value.AsBool(), "el scan tardío NO sobrescribió el failsafe (sigue OFF)");
+
+        await svc.StopAsync(CancellationToken.None);
     }
 
     // ── Primer scan: armado inicial con timeout completo ──────────────────
-    [Fact]
-    public async Task Watchdog_FirstScan_SlowButWithinTimeout_DoesNotFire()
+    private sealed class SlowScanCoordinator : ScanCoordinator
     {
-        using var wd = new WatchdogService();
-        wd.SetTimeoutMs(1000);
-        wd.Armed = true; // primer scan armado: el plazo corre desde aquí
+        private readonly int _delayMs;
+        public SlowScanCoordinator(int delayMs) => _delayMs = delayMs;
+        public override ScanCoordinator.ScanResult Scan(ScanRequest request)
+        {
+            // Simula un scan lento (trabajo dentro del lock del coordinator).
+            Thread.Sleep(_delayMs);
+            return base.Scan(request);
+        }
+    }
 
-        var fired = false;
-        wd.OnTimeout = () => fired = true;
-        wd.Start();
+    private static (PlcRuntimeService svc, RuntimeStateStore store, WatchdogService wd, ScanCoordinator coordinator, LogicProgram program, Guid motor)
+        BuildRunningService(double watchdogTimeoutMs, ScanCoordinator coordinator)
+    {
+        var store = new RuntimeStateStore();
+        var wd = new WatchdogService();
+        wd.SetTimeoutMs(watchdogTimeoutMs);
+        var svc = new PlcRuntimeService(
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<PlcRuntimeService>.Instance,
+            store, wd, new CountingNotifier(), audit: null, coordinator);
 
-        // Primer scan completa dentro del timeout.
-        await Task.Delay(200);
-        wd.Heartbeat();
-
-        Assert.True(wd.IsAlive);
-        Assert.False(fired);
+        var motor = Guid.NewGuid();
+        var defs = new Dictionary<Guid, VariableDefinition>
+        {
+            [motor] = new VariableDefinition { Id = motor, Key = "Motor", DataType = PlcDataType.Bool, Direction = VariableDirection.Output }
+        };
+        var program = new LogicProgram
+        {
+            Name = "Motor",
+            Rules = new List<LogicRule>
+            {
+                new LogicRule
+                {
+                    Name = "On",
+                    Priority = 10,
+                    Condition = null,
+                    Actions = new List<LogicAction> { new SetOutputAction { VariableId = motor, Value = "true" } }
+                }
+            }
+        };
+        svc.InstallConfiguration(program, defs, new List<Interlock>(), new Dictionary<Guid, PlcValue> { [motor] = PlcValue.Bool(false) });
+        return (svc, store, wd, coordinator, program, motor);
     }
 
     [Fact]
-    public async Task Watchdog_FirstScan_SlowBeyondTimeout_Fires()
+    public async Task FirstScan_SlowButWithinTimeout_DoesNotFault()
     {
-        using var wd = new WatchdogService();
-        wd.SetTimeoutMs(150);
-        wd.Armed = true; // primer scan armado; sin heartbeat previo
+        // Primer scan lento PERO dentro del timeout: el armado inicial le da el timeout
+        // completo y NO dispara Faulted prematuramente.
+        var (svc, store, wd, coordinator, program, motor) = BuildRunningService(1000, new SlowScanCoordinator(300));
 
-        var tcs = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-        wd.OnTimeout = () => tcs.TrySetResult(true);
-        wd.Start();
+        await svc.StartAsync(CancellationToken.None);
+        svc.Post(new ActivateProgramCommand(program));
 
-        // Primer scan NO completa dentro del timeout → el watchdog dispara.
-        var fired = await tcs.Task.WaitAsync(TimeSpan.FromSeconds(3));
-        Assert.True(fired);
+        // Dejar tiempo para que el primer scan (300ms < 1000ms) complete.
+        await Task.Delay(800);
+
+        // Nunca debió entrar en Faulted: el primer scan tuvo el timeout completo.
+        Assert.NotEqual(RuntimeState.Faulted, store.Snapshot.State);
+        Assert.True(store.Snapshot.Outputs.TryGetValue(motor, out var o));
+        Assert.True(o.Value.AsBool(), "output ON tras el primer scan (completó a tiempo)");
+
+        await svc.StopAsync(CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task FirstScan_SlowBeyondTimeout_Faults()
+    {
+        // Primer scan lento MÁS ALLÁ del timeout: el watchdog debe disparar Faulted.
+        var (svc, store, wd, coordinator, program, motor) = BuildRunningService(150, new SlowScanCoordinator(1000));
+
+        await svc.StartAsync(CancellationToken.None);
+        svc.Post(new ActivateProgramCommand(program));
+
+        WaitUntil(() => store.Snapshot.State == RuntimeState.Faulted, "Faulted por primer scan lento", 3000);
+
+        Assert.Equal(RuntimeState.Faulted, store.Snapshot.State);
+        // El failsafe ya se aplicó mientras el scan lento seguía dentro del coordinator.
+        Assert.True(store.Snapshot.Outputs.TryGetValue(motor, out var o));
+        Assert.False(o.Value.AsBool(), "output en failsafe durante el scan lento");
+
+        await svc.StopAsync(CancellationToken.None);
     }
 
     private static void WaitUntil(Func<bool> condition, string reason, int timeoutMs = 3000)

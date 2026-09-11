@@ -40,6 +40,7 @@ public sealed class PlcRuntimeService : BackgroundService
     private readonly Dictionary<Guid, ForcedOutput> _forcedOutputs = new();
 
     private volatile RuntimeState _state = RuntimeState.Stopped;
+    private long _scanGeneration;
     private RuntimeMode _mode = RuntimeMode.Simulation;
 
     private double _targetScanMs = 50;
@@ -177,7 +178,7 @@ public sealed class PlcRuntimeService : BackgroundService
         if (_state != RuntimeState.Running) return;
         _logger.LogError("Watchdog: scan superó el timeout ({Timeout}ms). Faulted + failsafe.",
             _watchdog.TimeoutMs);
-        _state = RuntimeState.Faulted;
+        TransitionState(RuntimeState.Faulted);
         _watchdog.Armed = false;
 
         // Failsafe lock-free: no depende del lock del coordinator retenido por el scan.
@@ -187,16 +188,37 @@ public sealed class PlcRuntimeService : BackgroundService
         Audit(AuditEventType.Fault, "Runtime", null, null, "watchdog timeout", "Faulted");
     }
 
+    /// <summary>
+    /// Cambia el estado de runtime y avanza la generación de scan. Cualquier scan en
+    /// curso (que capturó la generación anterior) verá la diferencia y descartará su
+    /// resultado al salir del lock — evitando el TOCTOU de un scan tardío.
+    /// </summary>
+    private void TransitionState(RuntimeState newState)
+    {
+        _state = newState;
+        Interlocked.Increment(ref _scanGeneration);
+    }
+
     private void RunScan()
     {
         var deltaMs = _monotonic.Elapsed.TotalMilliseconds;
         _monotonic.Restart();
+
+        // Token/generación anti-TOCTOU: capturado al inicio del scan. Si el watchdog (u
+        // otra transición) cambia el estado mientras el scan está suspendido/haciendo
+        // trabajo, al salir del lock la generación diferirá y el scan tardío SE DESCARTA
+        // (no publica outputs, no heartbeat), evitando sobrescribir los failsafe.
+        var generation = Interlocked.Read(ref _scanGeneration);
 
         _scanWatch.Restart();
         try
         {
             if (_activeProgram is null)
                 return;
+
+            Dictionary<Guid, RuntimeValue>? newMemory = null;
+            IReadOnlyDictionary<Guid, RuntimeValue>? newInputs = null;
+            IReadOnlyDictionary<Guid, RuntimeValue>? newOutputs = null;
 
             lock (_coordinator)
             {
@@ -214,7 +236,7 @@ public sealed class PlcRuntimeService : BackgroundService
                     forcedProposals);
                 var result = _coordinator.Scan(request);
 
-                _memory = result.Memory.Values.ToDictionary(k => k.Key, v => new RuntimeValue
+                newMemory = result.Memory.Values.ToDictionary(k => k.Key, v => new RuntimeValue
                 {
                     VariableId = v.Value.VariableId,
                     Value = v.Value.Value,
@@ -223,19 +245,31 @@ public sealed class PlcRuntimeService : BackgroundService
                     TimestampUtc = v.Value.TimestampUtc,
                     SequenceNumber = v.Value.SequenceNumber
                 });
-
-                _lastInputs = result.Inputs.Values;
-                _lastOutputs = result.Outputs.Values;
-
-                // Notificar cambios de salida individual
-                foreach (var outKv in result.Outputs.Values)
-                {
-                    _ = _notifier.NotifyOutputChangedAsync(outKv.Key, outKv.Value.Value);
-                }
-
-                _totalScans++;
-                _lastCompleted = DateTime.UtcNow;
+                newInputs = result.Inputs.Values;
+                newOutputs = result.Outputs.Values;
             }
+
+            // Punto de decisión post-lock: si el estado cambió mientras el scan estaba en
+            // curso (p.ej. watchdog → Faulted), descartamos el resultado completo.
+            if (Interlocked.Read(ref _scanGeneration) != generation || _state != RuntimeState.Running)
+            {
+                _logger.LogWarning("Scan descartado: el runtime cambió de estado durante el scan (gen {Old}→{New}).",
+                    generation, Interlocked.Read(ref _scanGeneration));
+                _scanWatch.Stop();
+                return;
+            }
+
+            _memory = newMemory!;
+            _lastInputs = newInputs!;
+            _lastOutputs = newOutputs!;
+
+            foreach (var outKv in newOutputs!)
+            {
+                _ = _notifier.NotifyOutputChangedAsync(outKv.Key, outKv.Value.Value);
+            }
+
+            _totalScans++;
+            _lastCompleted = DateTime.UtcNow;
 
             _scanWatch.Stop();
             var elapsedMs = _scanWatch.Elapsed.TotalMilliseconds;
@@ -248,7 +282,7 @@ public sealed class PlcRuntimeService : BackgroundService
         {
             _scanWatch.Stop();
             _logger.LogError(ex, "Error en el scan");
-            _state = RuntimeState.Faulted;
+            TransitionState(RuntimeState.Faulted);
             ApplyFailsafeOutputs("scan fault");
             UpdateMetrics(_scanWatch.Elapsed.TotalMilliseconds);
             _ = _notifier.NotifyStateChangedAsync(_state);
@@ -326,17 +360,17 @@ public sealed class PlcRuntimeService : BackgroundService
         {
             case ActivateProgramCommand a:
                 InstallConfiguration(a.Program, _definitions, _interlocks, _failsafeValues);
-                _state = RuntimeState.Running;
+                TransitionState(RuntimeState.Running);
                 break;
             case PauseCommand:
-                _state = RuntimeState.Stopped;
+                TransitionState(RuntimeState.Stopped);
                 ApplyFailsafeOutputs("pause");
                 break;
             case ResumeCommand:
-                if (_activeProgram is not null) _state = RuntimeState.Running;
+                if (_activeProgram is not null) TransitionState(RuntimeState.Running);
                 break;
             case StopCommand:
-                _state = RuntimeState.Stopped;
+                TransitionState(RuntimeState.Stopped);
                 ClearForces();
                 ApplyFailsafeOutputs("stop");
                 break;
@@ -376,7 +410,7 @@ public sealed class PlcRuntimeService : BackgroundService
 
     private async Task ShutdownAsync()
     {
-        _state = RuntimeState.Stopped;
+        TransitionState(RuntimeState.Stopped);
         _watchdog.Armed = false;
         ClearForces();
         ApplyFailsafeOutputs("shutdown");

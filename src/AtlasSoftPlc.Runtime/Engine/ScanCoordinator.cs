@@ -10,7 +10,7 @@ using AtlasSoftPlc.Runtime.Snapshots;
 namespace AtlasSoftPlc.Runtime.Engine;
 
 /// <summary>Clase Chicken-inicial del scan: coordina captura, ejecución y arbitraje.</summary>
-public sealed class ScanCoordinator
+public class ScanCoordinator
 {
     private readonly TimerManager _timers;
     private readonly CounterManager _counters;
@@ -49,7 +49,7 @@ public sealed class ScanCoordinator
     /// <summary>
     /// Ejecuta un scan completo y determinista.
     /// </summary>
-    public ScanResult Scan(ScanRequest request)
+    public virtual ScanResult Scan(ScanRequest request)
     {
         var program = request.Program;
         var definitions = request.Definitions;

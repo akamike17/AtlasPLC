@@ -144,7 +144,8 @@ public sealed class WatchdogService : IDisposable
     private long _timeoutTicks = TimeSpan.FromMilliseconds(2000).Ticks;
     private Timer? _timer;
     private readonly SemaphoreSlim _gate = new(1, 1);
-    private bool _armed;
+    // volatile: se escribe desde el loop de scan y se lee desde el timer (hilos distintos).
+    private volatile bool _armed;
 
     /// <summary>Se dispara (en un hilo del thread-pool) cuando un scan armado supera el timeout.</summary>
     public Action? OnTimeout { get; set; }
