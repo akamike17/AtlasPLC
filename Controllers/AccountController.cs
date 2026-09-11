@@ -1,4 +1,5 @@
 using System.Security.Claims;
+using AtlasSoftPlc.Web.Auth;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authorization;
@@ -8,29 +9,28 @@ namespace AtlasSoftPlc.Web.Controllers;
 
 /// <summary>
 /// Autenticación local por cookies con roles (sección 61).
-/// Para el MVP se mantiene un usuario local demo por rol; en producción esto
-/// debe respaldarse en un store de usuarios con hash de contraseña (Argon2/BCrypt).
+/// Credenciales verificadas contra el store de usuarios (Argon2id), con lockout
+/// y rate limiting anti fuerza bruta. Sin credenciales hardcodeadas en el binario:
+/// los usuarios se siembran desde configuración (appsettings / variables de entorno).
 /// </summary>
 public sealed class AccountController : Controller
 {
-    // USUARIOS DEMO — CONTRA SEÑALADA EN LA AUDITORÍA DE SEGURIDAD.
-    // Credenciales fijas SOLO para el MVP local. En producción esto DEBE
-    // sustituirse por un store de usuarios (Argon2id/BCrypt) y config externa.
-    // No se mueven a appsettings porque el MVP no tiene proveedor de usuarios real;
-    // cambiarlas aquí sin un sistema de auth real sería cosmético.
-    private static readonly (string User, string Password, string Role)[] DemoUsers =
-    {
-        ("admin", "admin", "Administrator"),
-        ("operador", "operador", "Operator"),
-    };
+    private readonly AuthService _auth;
+    private readonly ILogger<AccountController> _logger;
 
-    private static readonly Dictionary<string, string> DisplayNames = new()
+    private static readonly Dictionary<string, string> DisplayNames = new(StringComparer.Ordinal)
     {
         ["Administrator"] = "Administrador",
         ["Operator"] = "Operador",
         ["Engineer"] = "Ingeniero",
         ["Viewer"] = "Observador",
     };
+
+    public AccountController(AuthService auth, ILogger<AccountController> logger)
+    {
+        _auth = auth;
+        _logger = logger;
+    }
 
     [HttpGet]
     [AllowAnonymous]
@@ -48,20 +48,38 @@ public sealed class AccountController : Controller
         if (!ModelState.IsValid)
             return View(model);
 
-        var match = DemoUsers.FirstOrDefault(u =>
-            string.Equals(u.User, model.Username, StringComparison.OrdinalIgnoreCase) &&
-            string.Equals(u.Password, model.Password, StringComparison.Ordinal));
+        var remoteIp = HttpContext.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+        var username = model.Username?.Trim() ?? string.Empty;
 
-        if (match == default)
+        switch (_auth.Authenticate(username, model.Password ?? string.Empty, remoteIp))
         {
-            ModelState.AddModelError(string.Empty, "Usuario o contraseña incorrectos.");
-            return View(model);
+            case LoginResult.LockedOut:
+                _logger.LogWarning("Login bloqueado por lockout para '{User}' desde {Ip}", username, remoteIp);
+                ModelState.AddModelError(string.Empty, "Cuenta bloqueada temporalmente por demasiados intentos fallidos. Reintente más tarde.");
+                return View(model);
+
+            case LoginResult.RateLimited:
+                _logger.LogWarning("Login limitado por tasa desde {Ip}", remoteIp);
+                ModelState.AddModelError(string.Empty, "Demasiados intentos. Espere un momento y reintente.");
+                return View(model);
+
+            case LoginResult.InvalidCredentials:
+                _logger.LogWarning("Credenciales inválidas para '{User}' desde {Ip}", username, remoteIp);
+                ModelState.AddModelError(string.Empty, "Usuario o contraseña incorrectos.");
+                return View(model);
+
+            case LoginResult.Success:
+                break;
+            default:
+                ModelState.AddModelError(string.Empty, "Error inesperado.");
+                return View(model);
         }
 
+        var user = _auth.FindUser(username)!;
         var claims = new List<Claim>
         {
-            new(ClaimTypes.Name, match.User),
-            new(ClaimTypes.Role, match.Role),
+            new(ClaimTypes.Name, user.Username),
+            new(ClaimTypes.Role, user.Role),
         };
 
         var identity = new ClaimsIdentity(claims, CookieAuthenticationDefaults.AuthenticationScheme);

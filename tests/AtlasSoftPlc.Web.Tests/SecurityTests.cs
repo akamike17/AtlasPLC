@@ -10,6 +10,10 @@ namespace AtlasSoftPlc.Web.Tests;
 /// </summary>
 public sealed class SecurityTests : IClassFixture<AtlasWebFactory>
 {
+    // Credenciales de semilla de Development (appsettings.Development.json).
+    private const string AdminUser = "admin";
+    private const string TestPassword = "AtlasDemo!2026";
+
     private readonly AtlasWebFactory _factory;
 
     public SecurityTests(AtlasWebFactory factory) => _factory = factory;
@@ -51,7 +55,7 @@ public sealed class SecurityTests : IClassFixture<AtlasWebFactory>
     public async Task SetInput_GuidInexistente_Devuelve404()
     {
         using var client = NewClient();
-        Assert.True(await LoginAsync(client, "admin", "admin"));
+        Assert.True(await LoginAsync(client, AdminUser, TestPassword));
 
         // Obtener token CSRF
         var token = await GetCsrfTokenAsync(client);
@@ -81,7 +85,7 @@ public sealed class SecurityTests : IClassFixture<AtlasWebFactory>
     public async Task Logout_Desautentica()
     {
         using var client = NewClient();
-        Assert.True(await LoginAsync(client, "admin", "admin"));
+        Assert.True(await LoginAsync(client, AdminUser, TestPassword));
 
         // Logout via form (requiere antiforgery)
         var token = ExtractAntiforgeryToken(await (await client.GetAsync("/")).Content.ReadAsStringAsync());

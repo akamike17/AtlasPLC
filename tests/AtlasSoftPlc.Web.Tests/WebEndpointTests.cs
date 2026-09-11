@@ -9,6 +9,9 @@ namespace AtlasSoftPlc.Web.Tests;
 /// </summary>
 public sealed class WebEndpointTests : IClassFixture<AtlasWebFactory>
 {
+    private const string AdminUser = "admin";
+    private const string TestPassword = "AtlasDemo!2026";
+
     private readonly AtlasWebFactory _factory;
 
     public WebEndpointTests(AtlasWebFactory factory) => _factory = factory;
@@ -49,7 +52,7 @@ public sealed class WebEndpointTests : IClassFixture<AtlasWebFactory>
     public async Task Dashboard_Autenticado_Devuelve200()
     {
         using var client = NewClient();
-        Assert.True(await LoginAsync(client, "admin", "admin"));
+        Assert.True(await LoginAsync(client, AdminUser, TestPassword));
 
         var resp = await client.GetAsync("/");
         Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
@@ -62,7 +65,7 @@ public sealed class WebEndpointTests : IClassFixture<AtlasWebFactory>
     public async Task Snapshot_Autenticado_Devuelve200()
     {
         using var client = NewClient();
-        Assert.True(await LoginAsync(client, "admin", "admin"));
+        Assert.True(await LoginAsync(client, AdminUser, TestPassword));
 
         var resp = await client.GetAsync("/api/runtime/snapshot");
         Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
@@ -74,7 +77,7 @@ public sealed class WebEndpointTests : IClassFixture<AtlasWebFactory>
     public async Task Timeline_Autenticado_Devuelve200()
     {
         using var client = NewClient();
-        Assert.True(await LoginAsync(client, "admin", "admin"));
+        Assert.True(await LoginAsync(client, AdminUser, TestPassword));
 
         var resp = await client.GetAsync("/api/runtime/timeline");
         Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
@@ -84,7 +87,7 @@ public sealed class WebEndpointTests : IClassFixture<AtlasWebFactory>
     public async Task Antiforgery_Autenticado_EmiteToken()
     {
         using var client = NewClient();
-        Assert.True(await LoginAsync(client, "admin", "admin"));
+        Assert.True(await LoginAsync(client, AdminUser, TestPassword));
 
         var resp = await client.GetAsync("/api/runtime/antiforgery");
         Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
@@ -96,7 +99,7 @@ public sealed class WebEndpointTests : IClassFixture<AtlasWebFactory>
     public async Task Explainer_Autenticado_ExplicaSalida()
     {
         using var client = NewClient();
-        Assert.True(await LoginAsync(client, "admin", "admin"));
+        Assert.True(await LoginAsync(client, AdminUser, TestPassword));
 
         // Obtener un id de salida real del dashboard
         var dash = await client.GetAsync("/");
@@ -117,7 +120,7 @@ public sealed class WebEndpointTests : IClassFixture<AtlasWebFactory>
     public async Task Simulation_Autenticado_Devuelve200()
     {
         using var client = NewClient();
-        Assert.True(await LoginAsync(client, "admin", "admin"));
+        Assert.True(await LoginAsync(client, AdminUser, TestPassword));
 
         var resp = await client.GetAsync("/Home/Simulation");
         Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
@@ -127,7 +130,7 @@ public sealed class WebEndpointTests : IClassFixture<AtlasWebFactory>
     public async Task Diagnostics_Autenticado_Devuelve200()
     {
         using var client = NewClient();
-        Assert.True(await LoginAsync(client, "admin", "admin"));
+        Assert.True(await LoginAsync(client, AdminUser, TestPassword));
 
         var resp = await client.GetAsync("/Home/Diagnostics");
         Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
@@ -145,7 +148,7 @@ public sealed class WebEndpointTests : IClassFixture<AtlasWebFactory>
     public async Task StartStop_Operator_Devuelve200_ConCsrf()
     {
         using var client = NewClient();
-        Assert.True(await LoginAsync(client, "admin", "admin"));
+        Assert.True(await LoginAsync(client, AdminUser, TestPassword));
 
         var token = await GetCsrfTokenAsync(client);
         var req = new HttpRequestMessage(HttpMethod.Post, "/api/runtime/start");
@@ -159,7 +162,7 @@ public sealed class WebEndpointTests : IClassFixture<AtlasWebFactory>
     public async Task StartStop_SinCsrf_Devuelve400()
     {
         using var client = NewClient();
-        Assert.True(await LoginAsync(client, "admin", "admin"));
+        Assert.True(await LoginAsync(client, AdminUser, TestPassword));
 
         var req = new HttpRequestMessage(HttpMethod.Post, "/api/runtime/stop");
         // sin token CSRF

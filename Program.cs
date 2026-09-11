@@ -6,6 +6,7 @@ using AtlasSoftPlc.Domain.Runtime;
 using AtlasSoftPlc.Infrastructure.Persistence;
 using AtlasSoftPlc.Runtime.Hosting;
 using AtlasSoftPlc.Web.Hubs;
+using AtlasSoftPlc.Web.Auth;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -73,6 +74,22 @@ builder.Services.AddScoped<ValidationService>(sp => new ValidationService(new IV
     new FailsafeValidationRule()
 }));
 
+// ---- Autenticación (Argon2id + lockout + rate limiting) ----
+var authConfig = builder.Configuration;
+
+var authOptions = new AuthOptions
+{
+    MaxFailedAttempts = int.TryParse(authConfig["Auth:MaxFailedAttempts"], out var mfa) ? mfa : 5,
+    MaxAttemptsPerWindow = int.TryParse(authConfig["Auth:MaxAttemptsPerWindow"], out var mapw) ? mapw : 20,
+    LockoutDuration = TimeSpan.TryParse(authConfig["Auth:LockoutDuration"], out var ld) ? ld : TimeSpan.FromMinutes(15),
+    RateLimitWindow = TimeSpan.TryParse(authConfig["Auth:RateLimitWindow"], out var rlw) ? rlw : TimeSpan.FromMinutes(1),
+};
+builder.Services.AddSingleton(authOptions);
+builder.Services.AddSingleton<AtlasSoftPlc.Web.Auth.IUserStore, AtlasSoftPlc.Web.Auth.SqliteUserStore>();
+builder.Services.AddSingleton<AtlasSoftPlc.Web.Auth.PasswordHasher>();
+builder.Services.AddSingleton<AtlasSoftPlc.Web.Auth.AuthService>();
+builder.Services.AddSingleton<AtlasSoftPlc.Web.Auth.UserSeeder>();
+
 // ---- Runtime ----
 builder.Services.AddSingleton<RuntimeStateStore>();
 builder.Services.AddSingleton<WatchdogService>();
@@ -96,6 +113,9 @@ builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationSc
 builder.Services.AddAuthorization();
 
 var app = builder.Build();
+
+// Sembrar usuarios iniciales (solo si la tabla está vacía).
+app.Services.GetRequiredService<AtlasSoftPlc.Web.Auth.UserSeeder>().SeedIfEmpty();
 
 if (!app.Environment.IsDevelopment())
 {
