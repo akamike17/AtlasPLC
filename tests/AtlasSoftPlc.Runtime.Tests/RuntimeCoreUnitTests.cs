@@ -108,134 +108,171 @@ public class OutputArbiterTests
         };
 
         var decision = new OutputArbiter.ArbitrationDecision(id, PlcValue.Bool(true), false, new List<OutputProposal>());
-        var arbiter = new OutputArbiter();
+                var arbiter = new OutputArbiter();
 
-        var result = arbiter.ApplyInterlocksAndFailsafe(
-            new[] { decision },
-            new[] { interlock },
-            new Dictionary<Guid, bool> { [interlockId] = true },
-            new Dictionary<Guid, PlcValue>(),
-            new Dictionary<Guid, PlcDataType> { [id] = PlcDataType.Bool });
+                var result = arbiter.ApplyInterlocksAndFailsafe(
+                    new[] { decision },
+                    new[] { interlock },
+                    new Dictionary<Guid, bool> { [interlockId] = true },
+                    new Dictionary<Guid, PlcValue>(),
+                    new Dictionary<Guid, PlcDataType> { [id] = PlcDataType.Bool });
 
-        Assert.Single(result);
-        Assert.False(result[0].Value.AsBool());
-    }
+                Assert.Single(result.Decisions);
+                Assert.Empty(result.Errors);
+                Assert.False(result.Decisions[0].Value.AsBool());
+            }
 
-    [Fact]
-    public void ApplyInterlocksAndFailsafe_InactiveInterlockDoesNotOverride()
-    {
-        var id = Guid.NewGuid();
-        var interlockId = Guid.NewGuid();
-        var interlock = new Interlock
-        {
-            Id = interlockId,
-            Name = "DoorOpen",
-            AffectedOutputs = new List<Guid> { id },
-            SafeValue = false
-        };
+            [Fact]
+            public void ApplyInterlocksAndFailsafe_InactiveInterlockDoesNotOverride()
+            {
+                var id = Guid.NewGuid();
+                var interlockId = Guid.NewGuid();
+                var interlock = new Interlock
+                {
+                    Id = interlockId,
+                    Name = "DoorOpen",
+                    AffectedOutputs = new List<Guid> { id },
+                    SafeValue = false
+                };
 
-        var decision = new OutputArbiter.ArbitrationDecision(id, PlcValue.Bool(true), false, new List<OutputProposal>());
-        var arbiter = new OutputArbiter();
+                var decision = new OutputArbiter.ArbitrationDecision(id, PlcValue.Bool(true), false, new List<OutputProposal>());
+                var arbiter = new OutputArbiter();
 
-        var result = arbiter.ApplyInterlocksAndFailsafe(
-            new[] { decision },
-            new[] { interlock },
-            new Dictionary<Guid, bool> { [interlockId] = false }, // inactive
-            new Dictionary<Guid, PlcValue>(),
-            new Dictionary<Guid, PlcDataType> { [id] = PlcDataType.Bool });
+                var result = arbiter.ApplyInterlocksAndFailsafe(
+                    new[] { decision },
+                    new[] { interlock },
+                    new Dictionary<Guid, bool> { [interlockId] = false }, // inactive
+                    new Dictionary<Guid, PlcValue>(),
+                    new Dictionary<Guid, PlcDataType> { [id] = PlcDataType.Bool });
 
-        Assert.Single(result);
-        Assert.True(result[0].Value.AsBool()); // unchanged
-    }
+                Assert.Single(result.Decisions);
+                Assert.True(result.Decisions[0].Value.AsBool()); // unchanged
+            }
 
-    [Fact]
-    public void ApplyInterlocksAndFailsafe_InterlockNotAffectingOutput()
-    {
-        var id = Guid.NewGuid();
-        var interlockId = Guid.NewGuid();
-        var otherOutput = Guid.NewGuid();
-        var interlock = new Interlock
-        {
-            Id = interlockId,
-            Name = "DoorOpen",
-            AffectedOutputs = new List<Guid> { otherOutput },
-            SafeValue = false
-        };
+            [Fact]
+            public void ApplyInterlocksAndFailsafe_UnresolvedInterlock_FailClosed()
+            {
+                // Un interlock no evaluable debe forzar SafeValue (fail-closed, P0-2),
+                // no darlo por inactivo.
+                var id = Guid.NewGuid();
+                var interlockId = Guid.NewGuid();
+                var interlock = new Interlock
+                {
+                    Id = interlockId,
+                    Name = "DoorOpen",
+                    AffectedOutputs = new List<Guid> { id },
+                    SafeValue = false
+                };
 
-        var decision = new OutputArbiter.ArbitrationDecision(id, PlcValue.Bool(true), false, new List<OutputProposal>());
-        var arbiter = new OutputArbiter();
+                var decision = new OutputArbiter.ArbitrationDecision(id, PlcValue.Bool(true), false, new List<OutputProposal>());
+                var arbiter = new OutputArbiter();
 
-        var result = arbiter.ApplyInterlocksAndFailsafe(
-            new[] { decision },
-            new[] { interlock },
-            new Dictionary<Guid, bool> { [interlockId] = true },
-            new Dictionary<Guid, PlcValue>(),
-            new Dictionary<Guid, PlcDataType> { [id] = PlcDataType.Bool });
+                var result = arbiter.ApplyInterlocksAndFailsafe(
+                    new[] { decision },
+                    new[] { interlock },
+                    new Dictionary<Guid, bool>(), // not evaluated
+                    new Dictionary<Guid, PlcValue> { [id] = PlcValue.Bool(true) }, // failsafe = ON (irrelevant)
+                    new Dictionary<Guid, PlcDataType> { [id] = PlcDataType.Bool },
+                    new Dictionary<Guid, string> { [interlockId] = "variable faltante" });
 
-        Assert.True(result[0].Value.AsBool());
-    }
+                Assert.Single(result.Decisions);
+                Assert.False(result.Decisions[0].Value.AsBool()); // fail-closed -> SafeValue OFF
+            }
 
-    [Fact]
-    public void ApplyInterlocksAndFailsafe_ConflictUsesFailsafe()
-    {
-        var id = Guid.NewGuid();
-        var decision = new OutputArbiter.ArbitrationDecision(id, PlcValue.Bool(true), true, new List<OutputProposal>());
-        var arbiter = new OutputArbiter();
+            [Fact]
+            public void ApplyInterlocksAndFailsafe_InterlockNotAffectingOutput()
+            {
+                var id = Guid.NewGuid();
+                var interlockId = Guid.NewGuid();
+                var otherOutput = Guid.NewGuid();
+                var interlock = new Interlock
+                {
+                    Id = interlockId,
+                    Name = "DoorOpen",
+                    AffectedOutputs = new List<Guid> { otherOutput },
+                    SafeValue = false
+                };
 
-        var result = arbiter.ApplyInterlocksAndFailsafe(
-            new[] { decision },
-            new List<Interlock>(),
-            new Dictionary<Guid, bool>(),
-            new Dictionary<Guid, PlcValue> { [id] = PlcValue.Bool(false) },
-            new Dictionary<Guid, PlcDataType> { [id] = PlcDataType.Bool });
+                var decision = new OutputArbiter.ArbitrationDecision(id, PlcValue.Bool(true), false, new List<OutputProposal>());
+                var arbiter = new OutputArbiter();
 
-        Assert.False(result[0].Value.AsBool()); // failsafe applied
-    }
+                var result = arbiter.ApplyInterlocksAndFailsafe(
+                    new[] { decision },
+                    new[] { interlock },
+                    new Dictionary<Guid, bool> { [interlockId] = true },
+                    new Dictionary<Guid, PlcValue>(),
+                    new Dictionary<Guid, PlcDataType> { [id] = PlcDataType.Bool });
 
-    [Fact]
-    public void ApplyInterlocksAndFailsafe_ConflictWithoutFailsafeKeepsValue()
-    {
-        var id = Guid.NewGuid();
-        var decision = new OutputArbiter.ArbitrationDecision(id, PlcValue.Bool(true), true, new List<OutputProposal>());
-        var arbiter = new OutputArbiter();
+                Assert.Single(result.Decisions);
+                Assert.True(result.Decisions[0].Value.AsBool());
+            }
 
-        var result = arbiter.ApplyInterlocksAndFailsafe(
-            new[] { decision },
-            new List<Interlock>(),
-            new Dictionary<Guid, bool>(),
-            new Dictionary<Guid, PlcValue>(), // no failsafe
-            new Dictionary<Guid, PlcDataType> { [id] = PlcDataType.Bool });
+            [Fact]
+            public void ApplyInterlocksAndFailsafe_ConflictUsesFailsafe()
+            {
+                var id = Guid.NewGuid();
+                var decision = new OutputArbiter.ArbitrationDecision(id, PlcValue.Bool(true), true, new List<OutputProposal>());
+                var arbiter = new OutputArbiter();
 
-        Assert.True(result[0].Value.AsBool()); // unchanged
-    }
+                var result = arbiter.ApplyInterlocksAndFailsafe(
+                    new[] { decision },
+                    new List<Interlock>(),
+                    new Dictionary<Guid, bool>(),
+                    new Dictionary<Guid, PlcValue> { [id] = PlcValue.Bool(false) },
+                    new Dictionary<Guid, PlcDataType> { [id] = PlcDataType.Bool });
 
-    [Fact]
-    public void ApplyInterlocksAndFailsafe_InterlockTakesPrecedenceOverFailsafe()
-    {
-        var id = Guid.NewGuid();
-        var interlockId = Guid.NewGuid();
-        var interlock = new Interlock
-        {
-            Id = interlockId,
-            Name = "DoorOpen",
-            AffectedOutputs = new List<Guid> { id },
-            SafeValue = false
-        };
+                Assert.Single(result.Decisions);
+                Assert.Empty(result.Errors);
+                Assert.False(result.Decisions[0].Value.AsBool()); // failsafe applied
+            }
 
-        // conflicted + interlock active -> interlock wins (safe value), not failsafe
-        var decision = new OutputArbiter.ArbitrationDecision(id, PlcValue.Bool(true), true, new List<OutputProposal>());
-        var arbiter = new OutputArbiter();
+            [Fact]
+            public void ApplyInterlocksAndFailsafe_ConflictWithoutFailsafe_ReportsError()
+            {
+                // Conflicto irresoluble sin failsafe: NO "primero gana", se reporta error (P1-2).
+                var id = Guid.NewGuid();
+                var decision = new OutputArbiter.ArbitrationDecision(id, PlcValue.Bool(true), true, new List<OutputProposal>());
+                var arbiter = new OutputArbiter();
 
-        var result = arbiter.ApplyInterlocksAndFailsafe(
-            new[] { decision },
-            new[] { interlock },
-            new Dictionary<Guid, bool> { [interlockId] = true },
-            new Dictionary<Guid, PlcValue> { [id] = PlcValue.Bool(true) }, // failsafe = ON (irrelevant, interlock wins)
-            new Dictionary<Guid, PlcDataType> { [id] = PlcDataType.Bool });
+                var result = arbiter.ApplyInterlocksAndFailsafe(
+                    new[] { decision },
+                    new List<Interlock>(),
+                    new Dictionary<Guid, bool>(),
+                    new Dictionary<Guid, PlcValue>(), // no failsafe
+                    new Dictionary<Guid, PlcDataType> { [id] = PlcDataType.Bool });
 
-        Assert.False(result[0].Value.AsBool());
-    }
-}
+                Assert.Empty(result.Decisions); // sin decisión operable
+                Assert.Single(result.Errors);   // error de configuración
+            }
+
+            [Fact]
+            public void ApplyInterlocksAndFailsafe_InterlockTakesPrecedenceOverFailsafe()
+            {
+                var id = Guid.NewGuid();
+                var interlockId = Guid.NewGuid();
+                var interlock = new Interlock
+                {
+                    Id = interlockId,
+                    Name = "DoorOpen",
+                    AffectedOutputs = new List<Guid> { id },
+                    SafeValue = false
+                };
+
+                // conflicted + interlock active -> interlock wins (safe value), not failsafe
+                var decision = new OutputArbiter.ArbitrationDecision(id, PlcValue.Bool(true), true, new List<OutputProposal>());
+                var arbiter = new OutputArbiter();
+
+                var result = arbiter.ApplyInterlocksAndFailsafe(
+                    new[] { decision },
+                    new[] { interlock },
+                    new Dictionary<Guid, bool> { [interlockId] = true },
+                    new Dictionary<Guid, PlcValue> { [id] = PlcValue.Bool(true) }, // failsafe = ON (irrelevant, interlock wins)
+                    new Dictionary<Guid, PlcDataType> { [id] = PlcDataType.Bool });
+
+                Assert.Single(result.Decisions);
+                Assert.False(result.Decisions[0].Value.AsBool());
+            }
+        }
 
 public class TimerStateTests
 {

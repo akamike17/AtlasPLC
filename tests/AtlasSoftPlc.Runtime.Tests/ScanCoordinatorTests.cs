@@ -143,7 +143,8 @@ public class ScanCoordinatorTests
             new Dictionary<Guid, PlcDataType> { [m] = PlcDataType.Bool },
             50);
 
-        Assert.Null(result.Outputs.Get(m));
+        Assert.NotNull(result.Outputs.Get(m));
+        Assert.False(result.Outputs.Get(m)!.Value.AsBool()); // sin propuesta: failsafe (P1-1)
     }
 
     [Fact]
@@ -162,7 +163,8 @@ public class ScanCoordinatorTests
             new Dictionary<Guid, PlcDataType> { [m] = PlcDataType.Bool },
             50);
 
-        Assert.Null(result.Outputs.Get(m));
+        Assert.NotNull(result.Outputs.Get(m));
+        Assert.False(result.Outputs.Get(m)!.Value.AsBool()); // sin propuesta: failsafe (P1-1)
     }
 
     [Fact]

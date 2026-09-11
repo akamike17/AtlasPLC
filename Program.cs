@@ -78,6 +78,7 @@ builder.Services.AddSingleton<IProjectRepository, SqliteProjectRepository>();
 builder.Services.AddSingleton<IVariableRepository, SqliteVariableRepository>();
 builder.Services.AddSingleton<ILogicProgramRepository, SqliteLogicProgramRepository>();
 builder.Services.AddSingleton<IAuditRepository, SqliteAuditRepository>();
+builder.Services.AddSingleton<IRuntimeAuditSink>(sp => (SqliteAuditRepository)sp.GetRequiredService<IAuditRepository>());
 builder.Services.AddSingleton<IHistorianRepository, SqliteHistorianRepository>();
 builder.Services.AddSingleton<IAlarmRepository, SqliteAlarmRepository>();
 builder.Services.AddSingleton<IProgramVersionRepository, SqliteProgramVersionRepository>();

@@ -19,6 +19,7 @@ public sealed class ScanCoordinator
     private readonly ExpressionEngine _exprEngine;
 
     private IReadOnlyDictionary<Guid, bool> _edgeState = new Dictionary<Guid, bool>();
+    private IReadOnlyDictionary<Guid, RuntimeValue> _lastDecidedOutputs = new Dictionary<Guid, RuntimeValue>();
     private long _scanNumber;
 
     public ScanCoordinator()
@@ -72,13 +73,26 @@ public sealed class ScanCoordinator
         var execResult = _executor.Execute(program, inputSnapshot, memorySnapshot, varContext, _edgeState);
         var newMemorySnapshot = new MemorySnapshot(mutableMemory);
 
-        // 3. arbitrar salidas
-        var decisions = _arbiter.Arbitrate(execResult.Proposals);
+        // 3. evaluar interlocks (activos y no-evaluables fail-closed)
+        var interlockActive = EvaluateInterlocks(interlocks, inputSnapshot, memorySnapshot, varContext, out var interlockErrors, out var interlockUnresolved);
 
-        // 4. interlocks + failsafe
-        var interlockActive = EvaluateInterlocks(interlocks, inputSnapshot, memorySnapshot, varContext, out var interlockErrors);
-        var finalDecisions = _arbiter.ApplyInterlocksAndFailsafe(
-            decisions, interlocks, interlockActive, failsafeValues, outputTypes);
+        // 3b. fusionar forces activos (P0-3) con las propuestas de la lógica.
+        // El force entra al arbitraje con prioridad ManualForcedSafeCommand; los
+        // interlocks/failsafe se aplican DESPUÉS y tienen prioridad sobre el force.
+        var allProposals = execResult.Proposals.ToList();
+        if (request.ForcedOutputs is not null)
+            allProposals.AddRange(request.ForcedOutputs);
+
+        // 4. resolver salidas: cada output definido, cada scan (valor/retenido/failsafe)
+        var arbiterOutcome = _arbiter.Resolve(
+            allProposals,
+            outputTypes,
+            lastOutputs: _lastDecidedOutputs,
+            failsafeValues,
+            interlocks,
+            interlockActive,
+            interlockUnresolved);
+        var finalDecisions = arbiterOutcome.Decisions;
 
         // 5. construir output snapshot
         var outputs = new Dictionary<Guid, RuntimeValue>();
@@ -88,8 +102,8 @@ public sealed class ScanCoordinator
             {
                 VariableId = d.VariableId,
                 Value = d.Value,
-                Quality = Quality.Good,
-                Source = ValueSource.Logic,
+                Quality = d.Forced ? Quality.Forced : Quality.Good,
+                Source = d.Forced ? ValueSource.Forced : ValueSource.Logic,
                 TimestampUtc = DateTime.UtcNow,
                 SequenceNumber = _scanNumber
             };
@@ -98,7 +112,13 @@ public sealed class ScanCoordinator
         // 6. actualizar edge state para el siguiente scan
         _edgeState = new Dictionary<Guid, bool>(execResult.EdgeState);
 
-        var errors = execResult.Errors.Concat(interlockErrors).ToList();
+        // 7. actualizar valores retenidos para el siguiente scan
+        _lastDecidedOutputs = outputs;
+
+        var errors = execResult.Errors
+            .Concat(interlockErrors)
+            .Concat(arbiterOutcome.Errors)
+            .ToList();
 
         return new ScanResult
         {
@@ -132,10 +152,12 @@ public sealed class ScanCoordinator
         InputSnapshot inputs,
         MemorySnapshot memory,
         VariableSnapshotContext varContext,
-        out List<string> errors)
+        out List<string> errors,
+        out Dictionary<Guid, string> unresolved)
     {
         var active = new Dictionary<Guid, bool>();
         errors = new List<string>();
+        unresolved = new Dictionary<Guid, string>();
         var ctx = new ScanExpressionContext(inputs, memory, _timers, _counters, varContext, _edgeState);
 
         foreach (var interlock in interlocks)
@@ -143,8 +165,11 @@ public sealed class ScanCoordinator
             var eval = _exprEngine.Evaluate(interlock.Condition, ctx);
             if (!eval.Ok)
             {
-                errors.Add($"[Interlock {interlock.Name}] {eval.Errors}");
-                active[interlock.Id] = false; // ante error no activamos interlock (fail-closed se maneja en failsafe)
+                var msg = $"[Interlock {interlock.Name}] {eval.Errors}";
+                errors.Add(msg);
+                // Fail-closed: registramos el interlock como no-evaluable y NO lo damos
+                // por inactivo. El arbitrador fuerza SafeValue/failsafe (P0-2).
+                unresolved[interlock.Id] = eval.Errors ?? "no evaluable";
                 continue;
             }
             active[interlock.Id] = eval.Value.AsBool();

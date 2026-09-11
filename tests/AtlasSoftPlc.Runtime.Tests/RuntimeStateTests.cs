@@ -175,6 +175,46 @@ public class WatchdogServiceTests
         wd.Heartbeat();
         Assert.True(wd.IsAlive);
     }
+
+    [Fact]
+    public void IsAlive_False_WithoutAnyScanHeartbeat()
+    {
+        // Sin scan completado no debe reportar salud falsa (P0-4).
+        var wd = new WatchdogService();
+        wd.SetTimeoutMs(100_000);
+        Assert.False(wd.IsAlive);
+        Assert.Null(wd.LastHeartbeatUtc);
+    }
+
+    [Fact]
+    public void LastHeartbeatUtc_Updates_OnHeartbeat()
+    {
+        var wd = new WatchdogService();
+        wd.Heartbeat();
+        Assert.NotNull(wd.LastHeartbeatUtc);
+        var first = wd.LastHeartbeatUtc!.Value;
+        Thread.Sleep(5);
+        wd.Heartbeat();
+        Assert.True(wd.LastHeartbeatUtc!.Value >= first);
+    }
+
+    [Fact]
+    public void TimeoutMs_ReportsConfiguredThreshold()
+    {
+        var wd = new WatchdogService();
+        wd.SetTimeoutMs(250);
+        Assert.Equal(250, wd.TimeoutMs);
+    }
+
+    [Fact]
+    public void IsAlive_False_AfterTimeout()
+    {
+        var wd = new WatchdogService();
+        wd.SetTimeoutMs(1);
+        wd.Heartbeat();
+        Thread.Sleep(10);
+        Assert.False(wd.IsAlive);
+    }
 }
 
 public class RuntimeCommandTests

@@ -59,7 +59,8 @@ public class TimerCounterScanTests
         var r1 = coord.Scan(program, defs, inputs, new Dictionary<Guid, RuntimeValue>(),
             new List<Interlock>(), new Dictionary<Guid, PlcValue> { [fan] = PlcValue.Bool(false) },
             new Dictionary<Guid, PlcDataType> { [fan] = PlcDataType.Bool }, 500);
-        Assert.Null(r1.Outputs.Get(fan));
+        Assert.NotNull(r1.Outputs.Get(fan));
+        Assert.False(r1.Outputs.Get(fan)!.Value.AsBool()); // sin propuesta: failsafe (P1-1), no desaparece
 
         // scan 2: delta 1000ms -> total >= 1000ms preset -> done
         var r2 = coord.Scan(program, defs, inputs, r1.Memory.Values,

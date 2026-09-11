@@ -2,6 +2,7 @@ using AtlasSoftPlc.Application.Services;
 using AtlasSoftPlc.Domain.Alarms;
 using AtlasSoftPlc.Domain.Audit;
 using AtlasSoftPlc.Domain.Projects;
+using AtlasSoftPlc.Domain.Runtime;
 
 namespace AtlasSoftPlc.Infrastructure.Persistence;
 
@@ -65,7 +66,7 @@ public sealed class SqliteAlarmRepository : IAlarmRepository
 }
 
 /// <summary>Repositorio SQLite de auditoría.</summary>
-public sealed class SqliteAuditRepository : IAuditRepository
+public sealed class SqliteAuditRepository : IAuditRepository, IRuntimeAuditSink
 {
     private readonly SqliteStore _store;
     public SqliteAuditRepository(SqliteStore store) => _store = store;

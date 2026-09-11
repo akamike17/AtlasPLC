@@ -1,4 +1,5 @@
 using System.Diagnostics;
+using AtlasSoftPlc.Domain.Audit;
 using AtlasSoftPlc.Domain.Common;
 using AtlasSoftPlc.Domain.Logic;
 using AtlasSoftPlc.Domain.Runtime;
@@ -20,6 +21,7 @@ public sealed class PlcRuntimeService : BackgroundService
     private readonly RuntimeStateStore _store;
     private readonly WatchdogService _watchdog;
     private readonly IRuntimeNotifier _notifier;
+    private readonly IRuntimeAuditSink? _audit;
     private readonly ScanCoordinator _coordinator = new();
     private readonly System.Threading.Channels.Channel<RuntimeCommand> _commands =
         System.Threading.Channels.Channel.CreateUnbounded<RuntimeCommand>();
@@ -35,7 +37,7 @@ public sealed class PlcRuntimeService : BackgroundService
     private IReadOnlyCollection<Interlock> _interlocks = new List<Interlock>();
     private Dictionary<Guid, PlcValue> _failsafeValues = new();
     private Dictionary<Guid, PlcDataType> _outputTypes = new();
-    private Dictionary<Guid, bool> _forcedOutputs = new();
+    private readonly Dictionary<Guid, ForcedOutput> _forcedOutputs = new();
 
     private RuntimeState _state = RuntimeState.Stopped;
     private RuntimeMode _mode = RuntimeMode.Simulation;
@@ -55,12 +57,14 @@ public sealed class PlcRuntimeService : BackgroundService
         ILogger<PlcRuntimeService> logger,
         RuntimeStateStore store,
         WatchdogService watchdog,
-        IRuntimeNotifier notifier)
+        IRuntimeNotifier notifier,
+        IRuntimeAuditSink? audit = null)
     {
         _logger = logger;
         _store = store;
         _watchdog = watchdog;
         _notifier = notifier;
+        _audit = audit;
     }
 
     public System.Threading.Channels.Channel<RuntimeCommand> Commands => _commands;
@@ -97,7 +101,7 @@ public sealed class PlcRuntimeService : BackgroundService
             _outputTypes = outputTypes;
             _memory = new Dictionary<Guid, RuntimeValue>();
             _inputs = new Dictionary<Guid, RuntimeValue>();
-            _forcedOutputs = new Dictionary<Guid, bool>();
+            _forcedOutputs.Clear();
         }
 
         _logger.LogInformation("Configuración instalada: {Program} v{Version}", newProgram.Name, newProgram.Version);
@@ -122,6 +126,11 @@ public sealed class PlcRuntimeService : BackgroundService
         _scanWatch.Start();
         _state = RuntimeState.Stopped;
 
+        // Watchdog independiente: detecta scan bloqueado desde un hilo del thread-pool,
+        // no desde este loop (Riesgo 1 corregido).
+        _watchdog.OnTimeout = HandleWatchdogTimeout;
+        _watchdog.Start();
+
         // detectar shutdown sucio (sección 86): si hay un flag previo, marcarlo
         // (persistencia real del flag se implementa en Infrastructure).
 
@@ -136,10 +145,14 @@ public sealed class PlcRuntimeService : BackgroundService
 
                 if (_state == RuntimeState.Running)
                 {
+                    _watchdog.Armed = true;
                     RunScan();
                 }
+                else
+                {
+                    _watchdog.Armed = false;
+                }
 
-                _watchdog.Heartbeat();
                 await timer.WaitForNextTickAsync(stoppingToken);
             }
         }
@@ -149,6 +162,19 @@ public sealed class PlcRuntimeService : BackgroundService
         }
 
         await ShutdownAsync();
+    }
+
+    /// <summary>Transición a Faulted + failsafe disparada por el watchdog independiente.</summary>
+    private void HandleWatchdogTimeout()
+    {
+        if (_state != RuntimeState.Running) return;
+        _logger.LogError("Watchdog: scan superó el timeout ({Timeout}ms). Faulted + failsafe.",
+            _watchdog.TimeoutMs);
+        _state = RuntimeState.Faulted;
+        _watchdog.Armed = false;
+        ApplyFailsafeOutputs("watchdog timeout");
+        _ = _notifier.NotifyStateChangedAsync(_state);
+        Audit(AuditEventType.Fault, "Runtime", null, null, "watchdog timeout", "Faulted");
     }
 
     private void RunScan()
@@ -165,6 +191,7 @@ public sealed class PlcRuntimeService : BackgroundService
             lock (_coordinator)
             {
                 var snapshotInputs = new Dictionary<Guid, RuntimeValue>(_inputs);
+                var forcedProposals = GetActiveForceProposals();
                 var request = ScanRequest.Create(
                     _activeProgram,
                     _definitions,
@@ -173,7 +200,8 @@ public sealed class PlcRuntimeService : BackgroundService
                     _interlocks,
                     _failsafeValues,
                     _outputTypes,
-                    deltaMs);
+                    deltaMs,
+                    forcedProposals);
                 var result = _coordinator.Scan(request);
 
                 _memory = result.Memory.Values.ToDictionary(k => k.Key, v => new RuntimeValue
@@ -202,13 +230,19 @@ public sealed class PlcRuntimeService : BackgroundService
             _scanWatch.Stop();
             var elapsedMs = _scanWatch.Elapsed.TotalMilliseconds;
             UpdateMetrics(elapsedMs);
+
+            // Heartbeat de scan COMPLETADO correctamente (P0-4): no es "loop vivo".
+            _watchdog.Heartbeat();
         }
         catch (Exception ex)
         {
             _scanWatch.Stop();
             _logger.LogError(ex, "Error en el scan");
             _state = RuntimeState.Faulted;
+            ApplyFailsafeOutputs("scan fault");
             UpdateMetrics(_scanWatch.Elapsed.TotalMilliseconds);
+            _ = _notifier.NotifyStateChangedAsync(_state);
+            Audit(AuditEventType.Fault, "Runtime", null, null, ex.Message, "Faulted");
         }
     }
 
@@ -286,13 +320,15 @@ public sealed class PlcRuntimeService : BackgroundService
                 break;
             case PauseCommand:
                 _state = RuntimeState.Stopped;
-                // failsafe outputs en shutdown real
+                ApplyFailsafeOutputs("pause");
                 break;
             case ResumeCommand:
                 if (_activeProgram is not null) _state = RuntimeState.Running;
                 break;
             case StopCommand:
                 _state = RuntimeState.Stopped;
+                ClearForces();
+                ApplyFailsafeOutputs("stop");
                 break;
             case SetManualInputCommand m:
                 SetInputs(new Dictionary<Guid, RuntimeValue>
@@ -310,10 +346,10 @@ public sealed class PlcRuntimeService : BackgroundService
                 _ = _notifier.NotifyInputChangedAsync(m.VariableId, m.Value);
                 break;
             case ForceOutputCommand f:
-                lock (_coordinator) _forcedOutputs[f.VariableId] = true;
+                SetForce(f);
                 break;
             case ClearForceCommand c:
-                lock (_coordinator) _forcedOutputs.Remove(c.VariableId);
+                ClearForce(c.VariableId);
                 break;
             case SetRuntimeModeCommand mode:
                 _mode = mode.Mode;
@@ -331,7 +367,176 @@ public sealed class PlcRuntimeService : BackgroundService
     private async Task ShutdownAsync()
     {
         _state = RuntimeState.Stopped;
+        _watchdog.Armed = false;
+        ClearForces();
+        ApplyFailsafeOutputs("shutdown");
         _logger.LogInformation("PlcRuntimeService detenido");
+        Audit(AuditEventType.Shutdown, "Runtime", null, null, null, "Success");
         await Task.CompletedTask;
+    }
+
+    /// <summary>Forzado de salida completo: valor + expiración + metadata (P0-3).</summary>
+    private sealed record ForcedOutput(PlcValue Value, DateTime? ExpiresAt, string Reason);
+
+    /// <summary>Registra un evento de auditoría de seguridad operacional si hay sumidero.</summary>
+    private void Audit(AuditEventType action, string entityType, Guid? entityId,
+        string? oldValue = null, string? newValue = null, string result = "Success")
+    {
+        if (_audit is null) return;
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                await _audit.AppendAsync(new AuditEvent
+                {
+                    User = "runtime",
+                    Action = action,
+                    EntityType = entityType,
+                    EntityId = entityId,
+                    OldValue = oldValue,
+                    NewValue = newValue,
+                    Result = result
+                });
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "No se pudo auditar {Action} para {EntityId}", action, entityId);
+            }
+        });
+    }
+
+    private void SetForce(ForceOutputCommand f)
+    {
+        lock (_coordinator)
+        {
+            // Validar que la variable exista y sea Output.
+            if (!_definitions.TryGetValue(f.VariableId, out var def) || def.Direction != VariableDirection.Output)
+            {
+                _logger.LogWarning("Force ignorado: variable {Id} inexistente o no es Output", f.VariableId);
+                return;
+            }
+
+            // Validar tipo.
+            if (def.DataType != f.Value.DataType)
+            {
+                _logger.LogWarning("Force ignorado: tipo {Actual} no coincide con el esperado {Esperado} para {Id}",
+                    f.Value.DataType, def.DataType, f.VariableId);
+                return;
+            }
+
+            DateTime? expiresAt = f.ExpiresAfter is null ? null : DateTime.UtcNow + f.ExpiresAfter.Value;
+            _forcedOutputs[f.VariableId] = new ForcedOutput(f.Value, expiresAt, "manual");
+            _logger.LogInformation("Force activado: {Id} = {Value} (expira {ExpiresAt})",
+                f.VariableId, f.Value, expiresAt?.ToString("O"));
+            Audit(AuditEventType.Force, "Output", f.VariableId, null, f.Value.AsString());
+        }
+    }
+
+    private void ClearForce(Guid variableId)
+    {
+        lock (_coordinator)
+        {
+            _forcedOutputs.Remove(variableId);
+        }
+        _logger.LogInformation("Force liberado: {Id}", variableId);
+        Audit(AuditEventType.Force, "Output", variableId, null, null, "Cleared");
+    }
+
+    private void ClearForces()
+    {
+        lock (_coordinator)
+        {
+            _forcedOutputs.Clear();
+        }
+    }
+
+    /// <summary>
+    /// Devuelve las propuestas de fuerza activas (P0-3). Los forces vencidos se expiran
+    /// automáticamente. Cada fuerza entra al arbitraje con prioridad
+    /// <see cref="OutputPriority.ManualForcedSafeCommand"/>: por encima del control
+    /// automático, por debajo de interlocks/failsafe de seguridad.
+    /// </summary>
+    private IReadOnlyCollection<OutputProposal> GetActiveForceProposals()
+    {
+        var proposals = new List<OutputProposal>();
+        lock (_coordinator)
+        {
+            var now = DateTime.UtcNow;
+            var expired = _forcedOutputs.Where(kv => kv.Value.ExpiresAt is not null && kv.Value.ExpiresAt <= now)
+                .Select(kv => kv.Key).ToList();
+            foreach (var id in expired)
+            {
+                _forcedOutputs.Remove(id);
+                _logger.LogInformation("Force expirado automáticamente: {Id}", id);
+                Audit(AuditEventType.Force, "Output", id, null, null, "Expired");
+            }
+
+            foreach (var (id, forced) in _forcedOutputs)
+            {
+                proposals.Add(new OutputProposal
+                {
+                    VariableId = id,
+                    Value = forced.Value.Raw ?? false,
+                    Priority = OutputPriority.ManualForcedSafeCommand,
+                    Reason = "manual force"
+                });
+            }
+        }
+        return proposals;
+    }
+
+    /// <summary>
+    /// Lleva TODAS las salidas a sus valores failsafe de forma explícita y atómica
+    /// (P0-1). Se usa en Stop, Pause, Fault, shutdown y watchdog. No depende de que
+    /// exista una propuesta de lógica en ese scan.
+    /// </summary>
+    private void ApplyFailsafeOutputs(string reason)
+    {
+        lock (_coordinator)
+        {
+            var outputs = new Dictionary<Guid, RuntimeValue>();
+            foreach (var (id, def) in _definitions)
+            {
+                if (def.Direction != VariableDirection.Output) continue;
+
+                var value = GetFailsafeOrDefault(id, def.DataType);
+                outputs[id] = new RuntimeValue
+                {
+                    VariableId = id,
+                    Value = value,
+                    Quality = Quality.Good,
+                    Source = ValueSource.Default,
+                    TimestampUtc = DateTime.UtcNow,
+                    SequenceNumber = _totalScans
+                };
+            }
+
+            _lastOutputs = outputs;
+
+            _store.Update(m =>
+            {
+                m.State = _state;
+                m.Outputs = _lastOutputs;
+            });
+
+            foreach (var (id, rv) in outputs)
+            {
+                _ = _notifier.NotifyOutputChangedAsync(id, rv.Value);
+            }
+        }
+
+        _logger.LogInformation("Failsafe aplicado a todas las salidas (motivo: {Reason})", reason);
+    }
+
+    /// <summary>
+    /// Failsafe configurado o, si falta, la política por defecto documentada en
+    /// <see cref="FailsafePolicy"/>. Nunca un valor implícito (P0-1 + riesgo 4).
+    /// </summary>
+    private PlcValue GetFailsafeOrDefault(Guid variableId, PlcDataType type)
+    {
+        if (_failsafeValues.TryGetValue(variableId, out var fs))
+            return fs;
+
+        return FailsafePolicy.Default(type);
     }
 }

@@ -132,17 +132,87 @@ public sealed class RuntimeSnapshot
     }
 }
 
-/// <summary>Watchdog lógico (sección 19) que registra heartbeat del scan.</summary>
-public sealed class WatchdogService
+/// <summary>
+/// Watchdog lógico (sección 19) que registra heartbeat del scan COMPLETADO y detecta
+/// scan bloqueado mediante un <see cref="System.Threading.Timer"/> independiente. No
+/// depende del hilo del loop de scan: si el scan se cuelga, el timer sigue corriendo en
+/// el thread-pool y dispara <see cref="OnTimeout"/>.
+/// </summary>
+public sealed class WatchdogService : IDisposable
 {
     private long _lastHeartbeatTicks = DateTime.UtcNow.Ticks;
     private long _timeoutTicks = TimeSpan.FromMilliseconds(2000).Ticks;
+    private Timer? _timer;
+    private readonly SemaphoreSlim _gate = new(1, 1);
+
+    /// <summary>Se dispara (en un hilo del thread-pool) cuando un scan armado supera el timeout.</summary>
+    public Action? OnTimeout { get; set; }
+
+    /// <summary>Indica si el watchdog debe vigilar (runtime en Running).</summary>
+    public volatile bool Armed;
 
     public RuntimeState Classification { get; private set; } = RuntimeState.Stopped;
 
-    public void SetTimeoutMs(double ms) => _timeoutTicks = (long)(ms * TimeSpan.TicksPerMillisecond);
+    /// <summary>Timeout en ms para considerar un heartbeat vencido.</summary>
+    public double TimeoutMs => _timeoutTicks / (double)TimeSpan.TicksPerMillisecond;
 
-    public void Heartbeat() => Interlocked.Exchange(ref _lastHeartbeatTicks, DateTime.UtcNow.Ticks);
+    /// <summary>Último heartbeat registrado (UTC), nulo si nunca hubo scan completado.</summary>
+    public DateTime? LastHeartbeatUtc { get; private set; }
 
-    public bool IsAlive => (DateTime.UtcNow.Ticks - Interlocked.Read(ref _lastHeartbeatTicks)) <= _timeoutTicks;
+    public void SetTimeoutMs(double ms)
+    {
+        _timeoutTicks = (long)(ms * TimeSpan.TicksPerMillisecond);
+        RestartTimer();
+    }
+
+    /// <summary>Registra un heartbeat de scan COMPLETADO (no simplemente loop vivo).</summary>
+    public void Heartbeat()
+    {
+        Interlocked.Exchange(ref _lastHeartbeatTicks, DateTime.UtcNow.Ticks);
+        LastHeartbeatUtc = DateTime.UtcNow;
+    }
+
+    /// <summary>
+    /// True solo si hubo un scan completado recientemente (dentro del timeout).
+    /// Nunca reporta salud por "loop vivo": sin heartbeat previo, está muerto.
+    /// </summary>
+    public bool IsAlive =>
+        LastHeartbeatUtc is not null &&
+        (DateTime.UtcNow.Ticks - Interlocked.Read(ref _lastHeartbeatTicks)) <= _timeoutTicks;
+
+    /// <summary>Arranca el timer de vigilancia independiente.</summary>
+    public void Start() => RestartTimer();
+
+    private void RestartTimer()
+    {
+        _timer?.Dispose();
+        var periodMs = Math.Max(10, (int)(_timeoutTicks / TimeSpan.TicksPerMillisecond / 2));
+        _timer = new Timer(_ => Evaluate(), null, periodMs, periodMs);
+    }
+
+    private void Evaluate()
+    {
+        if (!Armed) return;
+        if (IsAlive) return;
+
+        // Detectar scan bloqueado/atrasado: disparar una única vez por episodio.
+        if (_gate.Wait(0))
+        {
+            try
+            {
+                if (Armed && !IsAlive)
+                    OnTimeout?.Invoke();
+            }
+            finally
+            {
+                _gate.Release();
+            }
+        }
+    }
+
+    public void Dispose()
+    {
+        _timer?.Dispose();
+        _gate.Dispose();
+    }
 }

@@ -104,11 +104,18 @@ public sealed class LogicExecutor
         switch (action)
         {
             case SetOutputAction o:
-                var outPv = ParseTyped(o.Value, o.VariableId, varContext);
+                var outParse = ParseTyped(o.Value, o.VariableId, varContext);
+                if (outParse.Error is not null)
+                {
+                    // Valor imposible de interpretar: no generamos propuesta inválida.
+                    // La política segura (failsafe) la aplica el arbitrador sobre el output afectado.
+                    result.Errors.Add($"[{rule.Name}] Output {o.VariableId}: {outParse.Error}");
+                    break;
+                }
                 result.Proposals.Add(new OutputProposal
                 {
                     VariableId = o.VariableId,
-                    Value = outPv.Raw ?? false,
+                    Value = outParse.Value!.Value.Raw ?? false,
                     Priority = OutputPriority.AutomaticControl,
                     SourceRuleId = rule.Id,
                     Reason = rule.Name
@@ -117,8 +124,13 @@ public sealed class LogicExecutor
                 break;
 
             case SetMemoryAction m:
-                var memPv = ParseTyped(m.Value, m.VariableId, varContext);
-                varContext.SetMemory(m.VariableId, memPv, ValueSource.Logic);
+                var memParse = ParseTyped(m.Value, m.VariableId, varContext);
+                if (memParse.Error is not null)
+                {
+                    result.Errors.Add($"[{rule.Name}] Memory {m.VariableId}: {memParse.Error}");
+                    break;
+                }
+                varContext.SetMemory(m.VariableId, memParse.Value!.Value, ValueSource.Logic);
                 trace.ActionDescriptions.Add($"Memory {m.VariableId} = {m.Value}");
                 break;
 
@@ -176,8 +188,13 @@ public sealed class LogicExecutor
         return "TON";
     }
 
-    /// <summary>Interpreta el string de la acción según el tipo de la variable destino.</summary>
-    private static PlcValue ParseTyped(string value, Guid variableId, VariableSnapshotContext varContext)
+    /// <summary>
+    /// Interpreta el string de la acción según el tipo de la variable destino.
+    /// Un valor imposible (overflow, formato, tipo incompatible) devuelve un error
+    /// explícito — nunca un String silencioso — para que la capa superior aplique
+    /// política segura (failsafe) sobre el output/memory afectado.
+    /// </summary>
+    private static (PlcValue? Value, string? Error) ParseTyped(string value, Guid variableId, VariableSnapshotContext varContext)
     {
         var type = varContext.GetVariableType(variableId);
         try
@@ -196,14 +213,17 @@ public sealed class LogicExecutor
                 PlcDataType.Float => float.Parse(value, CultureInfo.InvariantCulture),
                 PlcDataType.Double => double.Parse(value, CultureInfo.InvariantCulture),
                 PlcDataType.Decimal => decimal.Parse(value, CultureInfo.InvariantCulture),
-                _ => value
+                PlcDataType.String => value,
+                PlcDataType.DateTime => DateTime.Parse(value, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind),
+                PlcDataType.TimeSpan => TimeSpan.Parse(value, CultureInfo.InvariantCulture),
+                _ => throw new FormatException($"Tipo no soportado para parseo: {type}")
             };
-            return new PlcValue(type, v);
+            return (new PlcValue(type, v), null);
         }
-        catch
+        catch (Exception ex)
         {
-            // fallback: entregamos el string; la validación aguas arriba lo detectará
-            return PlcValue.String(value);
+            // error explícito: nunca convertir silenciosamente a String.
+            return (null, $"valor inválido para {type}: '{value}' ({ex.Message})");
         }
     }
 }
