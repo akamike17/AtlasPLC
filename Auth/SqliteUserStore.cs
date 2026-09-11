@@ -20,21 +20,7 @@ public sealed class SqliteUserStore : IUserStore
     public SqliteUserStore(AtlasSoftPlc.Infrastructure.Persistence.SqliteStore store)
     {
         _store = store;
-        EnsureSchema();
-    }
-
-    private void EnsureSchema()
-    {
-        using var conn = _store.OpenConnection();
-        using var cmd = conn.CreateCommand();
-        cmd.CommandText = @"
-CREATE TABLE IF NOT EXISTS Users (
-    Username TEXT PRIMARY KEY,
-    PasswordHash TEXT NOT NULL,
-    Role TEXT NOT NULL,
-    DisplayName TEXT NULL
-);";
-        cmd.ExecuteNonQuery();
+        // La tabla Users la crea SchemaMigrator (migración 1); no hace falta EnsureSchema aquí.
     }
 
     public UserAccount? FindByUsername(string username)

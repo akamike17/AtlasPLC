@@ -1,0 +1,142 @@
+using Microsoft.Data.Sqlite;
+
+namespace AtlasSoftPlc.Infrastructure.Persistence;
+
+/// <summary>
+/// Runner de migraciones de esquema SQLite, versionadas y transaccionales.
+/// Cada migración es un (int Version, string Sql) inmutable. Se aplican en orden,
+/// cada una dentro de su propia transacción, registrando la versión en SchemaMigrations.
+/// </summary>
+public static class SchemaMigrator
+{
+    public const int LatestVersion = 1;
+
+    private static readonly (int Version, string Sql)[] Migrations =
+    {
+        (1, Migration1),
+    };
+
+    public static void Migrate(SqliteStore store)
+    {
+        using var conn = store.OpenConnection();
+        EnsureMigrationTable(conn);
+
+        var applied = GetAppliedVersions(conn);
+        foreach (var (version, sql) in Migrations)
+        {
+            if (applied.Contains(version))
+                continue;
+
+            using var tx = conn.BeginTransaction();
+            using (var cmd = conn.CreateCommand())
+            {
+                cmd.Transaction = tx;
+                cmd.CommandText = sql;
+                cmd.ExecuteNonQuery();
+            }
+            using (var cmd = conn.CreateCommand())
+            {
+                cmd.Transaction = tx;
+                cmd.CommandText = "INSERT INTO SchemaMigrations (Version, AppliedUtc) VALUES ($v, $t)";
+                cmd.Parameters.AddWithValue("$v", version);
+                cmd.Parameters.AddWithValue("$t", DateTimeOffset.UtcNow.ToString("O"));
+                cmd.ExecuteNonQuery();
+            }
+            tx.Commit();
+        }
+    }
+
+    public static int CurrentVersion(SqliteStore store)
+    {
+        using var conn = store.OpenConnection();
+        EnsureMigrationTable(conn);
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT COALESCE(MAX(Version), 0) FROM SchemaMigrations";
+        var result = cmd.ExecuteScalar();
+        return result is null ? 0 : Convert.ToInt32(result);
+    }
+
+    private static void EnsureMigrationTable(SqliteConnection conn)
+    {
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = @"
+CREATE TABLE IF NOT EXISTS SchemaMigrations (
+    Version INTEGER PRIMARY KEY,
+    AppliedUtc TEXT NOT NULL
+);";
+        cmd.ExecuteNonQuery();
+    }
+
+    private static HashSet<int> GetAppliedVersions(SqliteConnection conn)
+    {
+        var set = new HashSet<int>();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT Version FROM SchemaMigrations";
+        using var reader = cmd.ExecuteReader();
+        while (reader.Read())
+            set.Add(reader.GetInt32(0));
+        return set;
+    }
+
+    // ── Migración 1: esquema base ──────────────────────────────
+    private const string Migration1 = @"
+CREATE TABLE IF NOT EXISTS Projects (
+    Id TEXT PRIMARY KEY,
+    Json TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS Variables (
+    Id TEXT PRIMARY KEY,
+    ProjectId TEXT NOT NULL,
+    Json TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS Devices (
+    Id TEXT PRIMARY KEY,
+    ProjectId TEXT NOT NULL,
+    Json TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS TagBindings (
+    Id TEXT PRIMARY KEY,
+    Json TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS LogicPrograms (
+    Id TEXT PRIMARY KEY,
+    ProjectId TEXT NOT NULL,
+    Json TEXT NOT NULL,
+    IsActive INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS LogicProgramVersions (
+    Id TEXT PRIMARY KEY,
+    ProgramId TEXT NOT NULL,
+    Json TEXT NOT NULL,
+    VersionNumber INTEGER NOT NULL,
+    CreatedUtc TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS AuditEvents (
+    Id TEXT PRIMARY KEY,
+    Json TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS HistorianSamples (
+    Id TEXT PRIMARY KEY,
+    VariableId TEXT NOT NULL,
+    TimestampUtc TEXT NOT NULL,
+    Json TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS AlarmInstances (
+    Id TEXT PRIMARY KEY,
+    Json TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS Settings (
+    Key TEXT PRIMARY KEY,
+    Value TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS Users (
+    Username TEXT PRIMARY KEY,
+    PasswordHash TEXT NOT NULL,
+    Role TEXT NOT NULL,
+    DisplayName TEXT NULL
+);
+CREATE INDEX IF NOT EXISTS IX_Variables_Project ON Variables(ProjectId);
+CREATE INDEX IF NOT EXISTS IX_Programs_Project ON LogicPrograms(ProjectId);
+CREATE INDEX IF NOT EXISTS IX_Historian_Variable ON HistorianSamples(VariableId, TimestampUtc);
+";
+}
