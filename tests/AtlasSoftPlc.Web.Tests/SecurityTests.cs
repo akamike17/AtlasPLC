@@ -82,6 +82,20 @@ public sealed class SecurityTests : IClassFixture<AtlasWebFactory>
     }
 
     [Fact]
+    public async Task CabecerasSeguridad_Presentes()
+    {
+        using var client = NewClient();
+        var resp = await client.GetAsync("/Account/Login");
+        Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
+
+        var h = resp.Headers;
+        Assert.Equal("nosniff", h.GetValues("X-Content-Type-Options").FirstOrDefault());
+        Assert.Equal("DENY", h.GetValues("X-Frame-Options").FirstOrDefault());
+        Assert.NotNull(h.GetValues("Content-Security-Policy").FirstOrDefault());
+        Assert.NotNull(h.GetValues("Referrer-Policy").FirstOrDefault());
+    }
+
+    [Fact]
     public async Task Logout_Desautentica()
     {
         using var client = NewClient();

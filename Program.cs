@@ -108,7 +108,11 @@ builder.Services.AddAuthentication(CookieAuthenticationDefaults.AuthenticationSc
         options.AccessDeniedPath = "/Account/AccessDenied";
         options.Cookie.HttpOnly = true;
         options.Cookie.SameSite = SameSiteMode.Strict;
-        options.Cookie.SecurePolicy = CookieSecurePolicy.SameAsRequest;
+        // En producción la cookie SIEMPRE se envía por HTTPS (nunca sobre HTTP plano).
+        // En desarrollo SameAsRequest permite el run local HTTP sin romper el flujo.
+        options.Cookie.SecurePolicy = builder.Environment.IsDevelopment()
+            ? CookieSecurePolicy.SameAsRequest
+            : CookieSecurePolicy.Always;
     });
 builder.Services.AddAuthorization();
 
@@ -140,6 +144,16 @@ app.Use(async (context, next) =>
     context.Response.Headers["X-Content-Type-Options"] = "nosniff";
     context.Response.Headers["X-Frame-Options"] = "DENY";
     context.Response.Headers["Referrer-Policy"] = "no-referrer";
+    context.Response.Headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()";
+    // CSP: solo recursos del propio origen + scripts necesarios para SignalR/Bootstrap.
+    // 'unsafe-inline' limitado a style/script del propio Razor; en una SPA estricta se eliminaría.
+    context.Response.Headers["Content-Security-Policy"] =
+        "default-src 'self'; " +
+        "script-src 'self' 'unsafe-inline'; " +
+        "style-src 'self' 'unsafe-inline'; " +
+        "img-src 'self' data:; " +
+        "connect-src 'self' ws: wss:; " +
+        "frame-ancestors 'none'; base-uri 'self'; form-action 'self'";
     await next();
 });
 
