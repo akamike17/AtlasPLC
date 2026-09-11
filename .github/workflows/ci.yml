@@ -1,0 +1,32 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build-test:
+    name: Build + Test (.NET 8)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Restore
+        run: dotnet restore AtlasSoftPlc.slnx
+
+      - name: Build (Release)
+        run: dotnet build AtlasSoftPlc.slnx -c Release --no-restore
+
+      - name: Test
+        run: dotnet test AtlasSoftPlc.slnx -c Release --no-build --verbosity normal
+
+      - name: Publish (validar que publica)
+        run: dotnet publish AtlasSoftPlc.Web.csproj -c Release --no-restore -o artifacts/publish
