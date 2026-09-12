@@ -9,13 +9,14 @@ namespace AtlasSoftPlc.Infrastructure.Persistence;
 /// </summary>
 public static class SchemaMigrator
 {
-    public const int LatestVersion = 3;
+    public const int LatestVersion = 4;
 
     private static readonly (int Version, string Sql)[] Migrations =
     {
         (1, Migration1),
         (2, Migration2),
         (3, Migration3),
+        (4, Migration4),
     };
 
     public static void Migrate(SqliteStore store)
@@ -156,5 +157,17 @@ CREATE TABLE IF NOT EXISTS AlarmDefinitions (
     private const string Migration3 = @"
 ALTER TABLE AuditEvents ADD COLUMN TimestampUtc TEXT NULL;
 ALTER TABLE Projects ADD COLUMN CreatedUtc TEXT NULL;
+";
+
+    // ── Migración 4: biblioteca de programas PLC persistentes ──
+    // Cada fila es una PlcProgramDefinition completa (variables + lógica + failsafe +
+    // mapa Modbus + metadata) serializada como JSON. Sustenta cargar/ejecutar múltiples
+    // programas dentro del mismo Atlas SoftPLC.
+    private const string Migration4 = @"
+CREATE TABLE IF NOT EXISTS PlcPrograms (
+    Id TEXT PRIMARY KEY,
+    Name TEXT NOT NULL,
+    Json TEXT NOT NULL
+);
 ";
 }

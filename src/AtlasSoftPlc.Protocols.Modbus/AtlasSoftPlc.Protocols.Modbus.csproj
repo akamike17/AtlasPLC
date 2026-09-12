@@ -1,9 +1,10 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
 
   <ItemGroup>
-    <ProjectReference Include="..\AtlasSoftPlc.Domain\AtlasSoftPlc.Domain.csproj" />
-    <ProjectReference Include="..\AtlasSoftPlc.Application\AtlasSoftPlc.Application.csproj" />
-  </ItemGroup>
+      <ProjectReference Include="..\AtlasSoftPlc.Domain\AtlasSoftPlc.Domain.csproj" />
+      <ProjectReference Include="..\AtlasSoftPlc.Application\AtlasSoftPlc.Application.csproj" />
+      <ProjectReference Include="..\AtlasSoftPlc.Targets.Abstractions\AtlasSoftPlc.Targets.Abstractions.csproj" />
+    </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="NModbus" Version="3.0.83" />

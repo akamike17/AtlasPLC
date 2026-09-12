@@ -17,11 +17,12 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="src\AtlasSoftPlc.Domain\AtlasSoftPlc.Domain.csproj" />
-    <ProjectReference Include="src\AtlasSoftPlc.Application\AtlasSoftPlc.Application.csproj" />
-    <ProjectReference Include="src\AtlasSoftPlc.Infrastructure\AtlasSoftPlc.Infrastructure.csproj" />
-    <ProjectReference Include="src\AtlasSoftPlc.Runtime\AtlasSoftPlc.Runtime.csproj" />
-  </ItemGroup>
+      <ProjectReference Include="src\AtlasSoftPlc.Domain\AtlasSoftPlc.Domain.csproj" />
+      <ProjectReference Include="src\AtlasSoftPlc.Application\AtlasSoftPlc.Application.csproj" />
+      <ProjectReference Include="src\AtlasSoftPlc.Infrastructure\AtlasSoftPlc.Infrastructure.csproj" />
+      <ProjectReference Include="src\AtlasSoftPlc.Runtime\AtlasSoftPlc.Runtime.csproj" />
+      <ProjectReference Include="src\AtlasSoftPlc.Protocols.Modbus\AtlasSoftPlc.Protocols.Modbus.csproj" />
+    </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="Konscious.Security.Cryptography.Argon2" Version="1.3.1" />

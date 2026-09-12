@@ -82,6 +82,7 @@ builder.Services.AddSingleton<IRuntimeAuditSink>(sp => (SqliteAuditRepository)sp
 builder.Services.AddSingleton<IHistorianRepository, SqliteHistorianRepository>();
 builder.Services.AddSingleton<IAlarmRepository, SqliteAlarmRepository>();
 builder.Services.AddSingleton<IProgramVersionRepository, SqliteProgramVersionRepository>();
+builder.Services.AddSingleton<IPlcProgramRepository, SqlitePlcProgramRepository>();
 
 // ---- Health checks (readiness/liveness) ----
 builder.Services.AddHealthChecks()
@@ -114,11 +115,18 @@ builder.Services.AddScoped<AuditService>();
 builder.Services.AddScoped<HistorianService>();
 builder.Services.AddScoped<AlarmService>();
 builder.Services.AddScoped<ProgramVersionService>();
+builder.Services.AddSingleton<PlcProgramService>();
 builder.Services.AddScoped<ConfigurationHasher>();
 builder.Services.AddScoped<ValidationService>(sp => new ValidationService(new IValidationRule[]
 {
     new ReferencesValidationRule(),
-    new FailsafeValidationRule()
+    new FailsafeValidationRule(),
+    new UndefinedReferenceValidationRule(),
+    new DuplicateWriterValidationRule(),
+    new OutputSafeStateValidationRule(),
+    new InterlockDominanceValidationRule(),
+    new ContradictoryExpressionValidationRule(),
+    new UnreachableBranchValidationRule()
 }));
 
 // ---- Autenticación (Argon2id + lockout + rate limiting) ----
@@ -143,6 +151,12 @@ builder.Services.AddSingleton<WatchdogService>();
 builder.Services.AddSingleton<PlcRuntimeService>();
 builder.Services.AddHostedService(sp => sp.GetRequiredService<PlcRuntimeService>());
 builder.Services.AddSingleton<AtlasSoftPlc.Web.Services.SimulationService>();
+
+// ---- Integración Modbus TCP (modalidad explícita, deshabilitada por defecto) ----
+builder.Services.Configure<AtlasSoftPlc.Web.Services.ModbusOptions>(
+    builder.Configuration.GetSection(AtlasSoftPlc.Web.Services.ModbusOptions.SectionName));
+builder.Services.AddSingleton<AtlasSoftPlc.Web.Services.ModbusIoService>();
+builder.Services.AddHostedService(sp => sp.GetRequiredService<AtlasSoftPlc.Web.Services.ModbusIoService>());
 
 // SignalR notifier
 builder.Services.AddSingleton<IRuntimeNotifier, SignalRRuntimeNotifier>();

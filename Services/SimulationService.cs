@@ -1,4 +1,4 @@
-using System.Collections.Concurrent;
+using AtlasSoftPlc.Application.Services;
 using AtlasSoftPlc.Domain.Common;
 using AtlasSoftPlc.Domain.Logic;
 using AtlasSoftPlc.Domain.Projects;
@@ -6,27 +6,27 @@ using AtlasSoftPlc.Domain.Runtime;
 using AtlasSoftPlc.Domain.Values;
 using AtlasSoftPlc.Domain.Variables;
 using AtlasSoftPlc.Runtime.Hosting;
-using AtlasSoftPlc.Runtime.Virtual;
 
 namespace AtlasSoftPlc.Web.Services;
 
 /// <summary>
-/// Mantiene el estado del proyecto activo en memoria para el MVP, alimenta
-/// el runtime y expone la simulación (bloque C / sección 24).
+/// Mantiene la biblioteca de programas PLC y el programa activo en memoria, alimenta el
+/// runtime y expone la simulación (bloque C / sección 24). La persistencia real de la
+/// biblioteca vive en SQLite vía <see cref="PlcProgramService"/>.
 /// </summary>
 public sealed class SimulationService
 {
     private readonly PlcRuntimeService _runtime;
+    private readonly PlcProgramService _catalogService;
     private readonly object _lock = new();
 
-    private Project? _project;
+    private readonly List<PlcProgramDefinition> _catalog = new();
+    private PlcProgramDefinition? _active;
     private readonly Dictionary<Guid, VariableDefinition> _variables = new();
     private LogicProgram? _program;
     private readonly Dictionary<Guid, RuntimeValue> _inputValues = new();
     private readonly List<ScanTrace> _timeline = new();
 
-    // Retención del timeline en memoria: cap duro para evitar crecimiento ilimitado
-    // en un proceso 24/7 (memoria acotada). Se descartan las entradas más antiguas.
     private const int TimelineCapacity = 1000;
 
     public sealed class ScanTrace
@@ -36,96 +36,156 @@ public sealed class SimulationService
         public string Description { get; set; } = string.Empty;
     }
 
-    public SimulationService(PlcRuntimeService runtime)
+    public SimulationService(PlcRuntimeService runtime, PlcProgramService catalogService)
     {
         _runtime = runtime;
+        _catalogService = catalogService;
     }
 
-    public Project? Project => _project;
+    public Project? Project { get; private set; }
     public LogicProgram? ActiveProgram => _program;
+    public PlcProgramDefinition? Active => _active;
     public IReadOnlyDictionary<Guid, VariableDefinition> Variables => _variables;
+    public IReadOnlyList<PlcProgramDefinition> Catalog => _catalog;
+    public IReadOnlyList<ScanTrace> Timeline { get { lock (_lock) return _timeline.ToList(); } }
 
-    /// <summary>Inicializa el proyecto de demo "Tanque" (sección 76/104).</summary>
-    public Project BootstrapTankDemo()
+    /// <summary>Mapa Modbus del programa activo (para el puente de I/O).</summary>
+    public IReadOnlyDictionary<string, string> ActiveModbusMap =>
+        _active?.ModbusMap ?? new Dictionary<string, string>();
+
+    // ── Biblioteca ────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// Carga la biblioteca desde persistencia y, si está vacía, la siembra con los
+    /// programas iniciales. Idempotente. Se invoca al arrancar y ante requests.
+    /// </summary>
+    public void EnsureLibrary()
     {
         lock (_lock)
         {
-            _project = new Project
+            if (_catalog.Count > 0)
+                return;
+
+            _catalogService.EnsureSeededAsync().GetAwaiter().GetResult();
+            var all = _catalogService.GetAllAsync().GetAwaiter().GetResult();
+            _catalog.Clear();
+            _catalog.AddRange(all);
+        }
+    }
+
+    public IReadOnlyList<PlcProgramDefinition> GetLibrary()
+    {
+        lock (_lock)
+        {
+            return _catalog.ToList();
+        }
+    }
+
+    /// <summary>
+    /// Carga un programa de la biblioteca como activo. Flujo seguro: si hay un programa
+    /// activo se detiene el runtime (estado seguro), se aíslan los tags del anterior y se
+    /// instala el nuevo. Devuelve false si el programa no existe.
+    /// </summary>
+    public bool LoadProgram(Guid id)
+    {
+        lock (_lock)
+        {
+            var program = _catalog.FirstOrDefault(p => p.Id == id);
+            if (program is null)
+                return false;
+
+            // 1. Estado seguro: detener el runtime antes de cambiar de programa.
+            _runtime.Post(new StopCommand());
+
+            // 2. Aislar tags del programa anterior (limpiar estado no compartido).
+            _variables.Clear();
+            _inputValues.Clear();
+            _program = null;
+            _active = null;
+
+            // 3. Instalar variables, lógica y failsafe del nuevo programa.
+            _active = program;
+            foreach (var v in program.Variables)
+                _variables[v.Id] = v;
+            _program = program.Logic;
+
+            // Inicializar inputs del nuevo programa a su failsafe (false/apagado).
+            foreach (var v in program.Variables.Where(x => x.Direction == VariableDirection.Input))
+                _inputValues[v.Id] = Runtime(v.Id, false);
+
+            Project = new Project
             {
-                Name = "Tanque de agua",
-                Description = "Llena el tanque cuando el nivel está bajo y se apaga al llegar arriba.",
+                Name = program.Name,
+                Description = program.Description,
                 Mode = RuntimeMode.Simulation,
                 LifecycleState = ProjectLifecycleState.SimulationReady
             };
 
-            // Variables (inputs + outputs)
-            var lowLevel = NewVar("LowLevelSensor", "Nivel bajo", PlcDataType.Bool, VariableDirection.Input, "Level");
-            var highLevel = NewVar("HighLevelSensor", "Nivel alto", PlcDataType.Bool, VariableDirection.Input, "Level");
-            var estop = NewVar("EmergencyStop", "Paro de emergencia", PlcDataType.Bool, VariableDirection.Input, "Switch");
-            var pump = NewVar("Pump", "Bomba", PlcDataType.Bool, VariableDirection.Output, "Motor");
-            pump.SafetyCritical = false;
-
-            // Programa lógico (3 reglas, sección 76)
-            _program = new LogicProgram
-            {
-                Name = "Tanque de agua",
-                Version = 1,
-                Rules = new List<LogicRule>
-                {
-                    new LogicRule
-                    {
-                        Name = "Paro de emergencia",
-                        Priority = 1000,
-                        Condition = new VariableExpression { VariableId = estop.Id, VariableKey = estop.Key },
-                        Actions = new List<LogicAction> { new SetOutputAction { VariableId = pump.Id, Value = "false" } }
-                    },
-                    new LogicRule
-                    {
-                        Name = "Encender bomba",
-                        Priority = 100,
-                        Condition = new AndExpression
-                        {
-                            Operands = new List<ExpressionNode>
-                            {
-                                new VariableExpression { VariableId = lowLevel.Id, VariableKey = lowLevel.Key },
-                                new NotExpression { Operand = new VariableExpression { VariableId = highLevel.Id, VariableKey = highLevel.Key } },
-                                new NotExpression { Operand = new VariableExpression { VariableId = estop.Id, VariableKey = estop.Key } }
-                            }
-                        },
-                        Actions = new List<LogicAction> { new SetOutputAction { VariableId = pump.Id, Value = "true" } }
-                    },
-                    new LogicRule
-                    {
-                        Name = "Apagar bomba por nivel alto",
-                        Priority = 100,
-                        Condition = new VariableExpression { VariableId = highLevel.Id, VariableKey = highLevel.Key },
-                        Actions = new List<LogicAction> { new SetOutputAction { VariableId = pump.Id, Value = "false" } }
-                    }
-                }
-            };
-
-            // Valores iniciales de entrada
-            _inputValues[lowLevel.Id] = Runtime(lowLevel.Id, false);
-            _inputValues[highLevel.Id] = Runtime(highLevel.Id, false);
-            _inputValues[estop.Id] = Runtime(estop.Id, false);
-
             InstallToRuntime();
-            return _project;
+
+            // 4. Arrancar el programa instalado.
+            _runtime.Post(new ResumeCommand());
+
+            return true;
         }
     }
 
-    private VariableDefinition NewVar(string key, string display, PlcDataType type, VariableDirection dir, string virtualIo)
+    /// <summary>
+    /// Bootstrap de compatibilidad: garantiza biblioteca y carga el programa inicial
+    /// (Tanque) si no hay ninguno activo.
+    /// </summary>
+    public Project? BootstrapTankDemo()
     {
-        var v = new VariableDefinition
+        EnsureLibrary();
+        lock (_lock)
         {
-            Key = key,
-            DisplayName = display,
-            DataType = type,
-            Direction = dir,
-            VirtualIoKind = virtualIo
+            if (_active is not null)
+                return Project;
+
+            var tank = _catalog.FirstOrDefault(p => p.Name == "Tanque de agua") ?? _catalog.FirstOrDefault();
+            if (tank is not null)
+                LoadProgramCore(tank);
+
+            return Project;
+        }
+    }
+
+    private void LoadProgramCore(PlcProgramDefinition program)
+    {
+        _active = program;
+        _variables.Clear();
+        foreach (var v in program.Variables)
+            _variables[v.Id] = v;
+        _program = program.Logic;
+
+        _inputValues.Clear();
+        foreach (var v in program.Variables.Where(x => x.Direction == VariableDirection.Input))
+            _inputValues[v.Id] = Runtime(v.Id, false);
+
+        Project = new Project
+        {
+            Name = program.Name,
+            Description = program.Description,
+            Mode = RuntimeMode.Simulation,
+            LifecycleState = ProjectLifecycleState.SimulationReady
         };
-        _variables[v.Id] = v;
-        return v;
+
+        InstallToRuntime();
+        _runtime.Post(new ResumeCommand());
+    }
+
+    private void InstallToRuntime()
+    {
+        if (_program is null) return;
+
+        var failsafe = new Dictionary<Guid, PlcValue>();
+        foreach (var v in _variables.Values.Where(x => x.Direction == VariableDirection.Output))
+            failsafe[v.Id] = _active?.Failsafe.TryGetValue(v.Id, out var fs) == true ? fs : PlcValue.Bool(false);
+
+        var interlocks = new List<Interlock>();
+
+        _runtime.InstallConfiguration(_program, _variables, interlocks, failsafe);
+        _runtime.SetInputs(_inputValues);
     }
 
     private static RuntimeValue Runtime(Guid id, bool value) => new()
@@ -137,22 +197,8 @@ public sealed class SimulationService
         TimestampUtc = DateTime.UtcNow
     };
 
-    private void InstallToRuntime()
-    {
-        if (_program is null) return;
-        var failsafe = new Dictionary<Guid, PlcValue>();
-        foreach (var v in _variables.Values.Where(x => x.Direction == VariableDirection.Output))
-            failsafe[v.Id] = PlcValue.Bool(false);
+    // ── Entradas / salidas (fuente de verdad: runtime) ────────────────────
 
-        var interlocks = new List<Interlock>();
-
-        _runtime.InstallConfiguration(_program, _variables, interlocks, failsafe);
-        _runtime.SetInputs(_inputValues);
-        _runtime.Post(new ResumeCommand());
-    }
-
-    /// <summary>Cambia una entrada (sensor/interruptor) desde la UI de simulación.
-    /// Devuelve false si la variable no existe o no es de entrada (IDOR-safe).</summary>
     public bool TrySetInput(Guid variableId, bool value)
     {
         lock (_lock)
@@ -187,15 +233,15 @@ public sealed class SimulationService
     public void Start() => _runtime.Post(new ResumeCommand());
     public void Stop() => _runtime.Post(new StopCommand());
 
-    /// <summary>Snapshot de todas las entradas para la UI.</summary>
     public Dictionary<string, object> GetInputsUi()
     {
         lock (_lock)
         {
+            var realInputs = _runtime.GetInputs();
             var result = new Dictionary<string, object>();
             foreach (var v in _variables.Values.Where(x => x.Direction == VariableDirection.Input))
             {
-                var val = _inputValues.TryGetValue(v.Id, out var rv) && rv.Value.HasValue
+                var val = realInputs.TryGetValue(v.Id, out var rv) && rv.Value.HasValue
                     ? rv.Value.AsBool()
                     : false;
                 result[v.Id.ToString()] = new { id = v.Id, key = v.Key, displayName = v.DisplayName, value = val };
@@ -204,12 +250,10 @@ public sealed class SimulationService
         }
     }
 
-    /// <summary>Snapshot de todas las salidas para la UI (con nombres legibles).</summary>
     public Dictionary<string, object> GetOutputsUi()
     {
         lock (_lock)
         {
-            // Estado REAL de salidas desde el runtime (ya no hardcodea false).
             var realOutputs = _runtime.GetOutputs();
             var result = new Dictionary<string, object>();
             foreach (var v in _variables.Values.Where(x => x.Direction == VariableDirection.Output))
@@ -222,8 +266,6 @@ public sealed class SimulationService
             return result;
         }
     }
-
-    public IReadOnlyList<ScanTrace> Timeline { get { lock (_lock) return _timeline.ToList(); } }
 
     private void TrimTimeline()
     {

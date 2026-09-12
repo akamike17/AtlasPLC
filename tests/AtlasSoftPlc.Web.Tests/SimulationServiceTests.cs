@@ -1,7 +1,9 @@
+using AtlasSoftPlc.Application.Services;
 using AtlasSoftPlc.Domain.Common;
 using AtlasSoftPlc.Domain.Runtime;
 using AtlasSoftPlc.Domain.Values;
 using AtlasSoftPlc.Domain.Variables;
+using AtlasSoftPlc.Infrastructure.Persistence;
 using AtlasSoftPlc.Runtime.Hosting;
 using AtlasSoftPlc.Web.Services;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -28,7 +30,14 @@ public sealed class SimulationServiceTests
         var watchdog = new WatchdogService();
         var notifier = new NullNotifier();
         var runtime = new PlcRuntimeService(NullLogger<PlcRuntimeService>.Instance, store, watchdog, notifier);
-        return new SimulationService(runtime);
+
+        // Repositorio de la biblioteca sobre SQLite aislado en temp (nunca la BD real).
+        var dbPath = Path.Combine(Path.GetTempPath(), "AtlasSoftPlcTests", Guid.NewGuid().ToString("N"), "atlas.db");
+        var sqlite = new SqliteStore(dbPath);
+        sqlite.EnsureCreated();
+        var catalogService = new PlcProgramService(new SqlitePlcProgramRepository(sqlite));
+
+        return new SimulationService(runtime, catalogService);
     }
 
     [Fact]
@@ -45,14 +54,17 @@ public sealed class SimulationServiceTests
     }
 
     [Fact]
-    public void BootstrapTankDemo_RecreatesProject()
+    public void BootstrapTankDemo_IsIdempotent()
     {
         var sim = CreateService();
         var p1 = sim.BootstrapTankDemo();
         var p2 = sim.BootstrapTankDemo();
 
-        Assert.NotSame(p1, p2); // recreates (new Project each call)
-        Assert.Equal("Tanque de agua", p2.Name);
+        // Idempotente: una vez cargado, volver a bootstrapear NO recrea el proyecto activo.
+        Assert.NotNull(p1);
+        Assert.NotNull(p2);
+        Assert.Same(p1, p2);
+        Assert.Equal("Tanque de agua", p2!.Name);
     }
 
     [Fact]
@@ -128,13 +140,22 @@ public sealed class SimulationServiceTests
         var inputId = sim.Variables.Values.First(v => v.Direction == VariableDirection.Input).Id;
         sim.TrySetInput(inputId, true);
 
+        // TrySetInput quedó registrado en el timeline (fuente de verdad observable sin loop de scan).
+        Assert.Single(sim.Timeline);
+        Assert.Contains("ON", sim.Timeline[0].Description);
+
+        // El contrato de GetInputsUi devuelve un objeto por input con la forma esperada.
+        // El valor publicado real llega vía el scan del runtime (no corre sin el hosted service);
+        // aquí verificamos la forma del DTO, que es lo que consume la UI.
         var inputs = sim.GetInputsUi();
         var entry = inputs[inputId.ToString()];
         Assert.NotNull(entry);
 
-        // El valor es un objeto anónimo; verificamos su serialización JSON
         var json = System.Text.Json.JsonSerializer.Serialize(entry);
-        Assert.Contains("\"value\":true", json);
+        Assert.Contains("\"id\"", json);
+        Assert.Contains("\"key\"", json);
+        Assert.Contains("\"displayName\"", json);
+        Assert.Contains("\"value\"", json);
     }
 
     [Fact]

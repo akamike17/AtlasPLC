@@ -21,9 +21,10 @@
   </ItemGroup>
 
   <ItemGroup>
-      <ProjectReference Include="..\..\src\AtlasSoftPlc.Domain\AtlasSoftPlc.Domain.csproj" />
-      <ProjectReference Include="..\..\src\AtlasSoftPlc.Application\AtlasSoftPlc.Application.csproj" />
-      <ProjectReference Include="..\..\src\AtlasSoftPlc.Runtime\AtlasSoftPlc.Runtime.csproj" />
-    </ItemGroup>
+    <ProjectReference Include="..\..\src\AtlasSoftPlc.Targets.Abstractions\AtlasSoftPlc.Targets.Abstractions.csproj" />
+    <ProjectReference Include="..\..\src\AtlasSoftPlc.Domain\AtlasSoftPlc.Domain.csproj" />
+    <ProjectReference Include="..\..\src\AtlasSoftPlc.Runtime\AtlasSoftPlc.Runtime.csproj" />
+    <ProjectReference Include="..\..\src\AtlasSoftPlc.Protocols.Modbus\AtlasSoftPlc.Protocols.Modbus.csproj" />
+  </ItemGroup>
 
 </Project>

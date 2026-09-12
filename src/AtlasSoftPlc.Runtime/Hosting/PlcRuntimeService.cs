@@ -122,6 +122,9 @@ public sealed class PlcRuntimeService : BackgroundService
     /// <summary>Snapshot inmutable de las salidas actuales del runtime (para la UI).</summary>
     public IReadOnlyDictionary<Guid, RuntimeValue> GetOutputs() => _store.Snapshot.Outputs;
 
+    /// <summary>Snapshot inmutable de las entradas actuales del runtime (para la UI).</summary>
+    public IReadOnlyDictionary<Guid, RuntimeValue> GetInputs() => _store.Snapshot.Inputs;
+
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         _logger.LogInformation("PlcRuntimeService iniciando");

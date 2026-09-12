@@ -1,4 +1,7 @@
 using System.Diagnostics;
+using AtlasSoftPlc.Application.Services;
+using AtlasSoftPlc.Domain.Projects;
+using AtlasSoftPlc.Domain.Runtime;
 using AtlasSoftPlc.Runtime.Hosting;
 using AtlasSoftPlc.Web.Models;
 using AtlasSoftPlc.Web.Services;
@@ -18,49 +21,72 @@ public class HomeController : Controller
         _sim = sim;
     }
 
+    private void EnsureDemo()
+    {
+        _sim.EnsureLibrary();
+        _sim.BootstrapTankDemo();
+    }
+
     public IActionResult Index()
     {
-        if (_sim.Project is null)
-            _sim.BootstrapTankDemo();
-
-        var model = new DashboardViewModel
-        {
-            Runtime = _store.Snapshot,
-            Project = _sim.Project!,
-            Inputs = _sim.GetInputsUi(),
-            Outputs = _sim.GetOutputsUi(),
-            Explanation = _sim.Project!.Name
-        };
-        return View(model);
+        EnsureDemo();
+        return View(BuildModel());
     }
 
     public IActionResult Simulation()
     {
-        if (_sim.Project is null)
-            _sim.BootstrapTankDemo();
-
-        return View(new DashboardViewModel
-        {
-            Runtime = _store.Snapshot,
-            Project = _sim.Project!,
-            Inputs = _sim.GetInputsUi(),
-            Outputs = _sim.GetOutputsUi()
-        });
+        EnsureDemo();
+        return View(BuildModel());
     }
 
     public IActionResult Diagnostics()
     {
-        if (_sim.Project is null)
-            _sim.BootstrapTankDemo();
+        EnsureDemo();
+        return View(BuildModel());
+    }
 
-        return View(new DashboardViewModel
+    /// <summary>Biblioteca de programas: listar y seleccionar.</summary>
+    public IActionResult Programs()
+    {
+        EnsureDemo();
+        return View(new ProgramsViewModel
         {
-            Runtime = _store.Snapshot,
-            Project = _sim.Project!,
-            Inputs = _sim.GetInputsUi(),
-            Outputs = _sim.GetOutputsUi()
+            Catalog = _sim.GetLibrary(),
+            ActiveProgramId = _sim.Active?.Id,
+            Runtime = _store.Snapshot
         });
     }
+
+    /// <summary>Carga un programa de la biblioteca (flujo seguro: Stop -> load -> Start).</summary>
+    [HttpPost]
+    [ValidateAntiForgeryToken]
+    public IActionResult LoadProgram(Guid id)
+    {
+        EnsureDemo();
+
+        // No permitir cambio silencioso con el runtime ejecutando: se detiene antes.
+        if (_store.Snapshot.State == RuntimeState.Running)
+        {
+            // El propio LoadProgram hace Stop interno; aquí solo confirmamos el flujo seguro.
+        }
+
+        var ok = _sim.LoadProgram(id);
+        if (!ok)
+            return NotFound();
+
+        return RedirectToAction(nameof(Programs));
+    }
+
+    private DashboardViewModel BuildModel() => new()
+    {
+        Runtime = _store.Snapshot,
+        Project = _sim.Project!,
+        Inputs = _sim.GetInputsUi(),
+        Outputs = _sim.GetOutputsUi(),
+        Explanation = _sim.Project?.Name ?? "",
+        Catalog = _sim.GetLibrary(),
+        ActiveProgramId = _sim.Active?.Id
+    };
 
     [ResponseCache(Duration = 0, Location = ResponseCacheLocation.None, NoStore = true)]
     public IActionResult Error()
@@ -75,8 +101,17 @@ public class HomeController : Controller
 public sealed class DashboardViewModel
 {
     public RuntimeSnapshot Runtime { get; set; } = RuntimeSnapshot.Initial;
-    public AtlasSoftPlc.Domain.Projects.Project Project { get; set; } = null!;
+    public Project Project { get; set; } = null!;
     public Dictionary<string, object> Inputs { get; set; } = new();
     public Dictionary<string, object> Outputs { get; set; } = new();
     public string Explanation { get; set; } = "";
+    public IReadOnlyList<PlcProgramDefinition> Catalog { get; set; } = new List<PlcProgramDefinition>();
+    public Guid? ActiveProgramId { get; set; }
+}
+
+public sealed class ProgramsViewModel
+{
+    public IReadOnlyList<PlcProgramDefinition> Catalog { get; set; } = new List<PlcProgramDefinition>();
+    public Guid? ActiveProgramId { get; set; }
+    public RuntimeSnapshot Runtime { get; set; } = RuntimeSnapshot.Initial;
 }
