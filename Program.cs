@@ -67,8 +67,13 @@ builder.Services.AddSingleton<ITargetRegistry, TargetRegistry>();
 builder.Services.AddSingleton<ITargetConfigurationProvider, SqliteTargetConfigurationProvider>();
 builder.Services.AddScoped<GraphApplicationService>();
 // Adapters concretos compuestos por DI; Modbus sólo expone I/O online, no deployment.
-builder.Services.AddSingleton<IPlcTargetAdapter, AtlasRuntimeTargetAdapter>();
-builder.Services.AddSingleton<IPlcTargetAdapter, ModbusOnlineAdapter>();
+builder.Services.AddSingleton<AtlasRuntimeTargetAdapter>();
+builder.Services.AddSingleton<ModbusOnlineAdapter>();
+builder.Services.AddSingleton<IPlcTargetAdapter>(sp => sp.GetRequiredService<AtlasRuntimeTargetAdapter>());
+builder.Services.AddSingleton<IPlcTargetAdapter>(sp => sp.GetRequiredService<ModbusOnlineAdapter>());
+builder.Services.AddSingleton<ITargetPlugin>(sp => new AdapterTargetPlugin(sp.GetRequiredService<AtlasRuntimeTargetAdapter>()));
+builder.Services.AddSingleton<ITargetPlugin>(sp => new AdapterTargetPlugin(sp.GetRequiredService<ModbusOnlineAdapter>()));
+builder.Services.AddSingleton<ITargetPluginRegistry, TargetPluginRegistry>();
 
 // Antiforgery para APIs JSON (sección de seguridad): token esperado en el header.
 builder.Services.AddAntiforgery(options =>
