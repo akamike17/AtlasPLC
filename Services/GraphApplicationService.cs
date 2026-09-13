@@ -26,16 +26,23 @@ public sealed class GraphApplicationService(
         var programResult = pipeline.Validate(candidate.Logic, candidate.Variables.ToDictionary(x => x.Id), ValidationOperation.Simulation);
         if (!programResult.Allowed) return new(false, "La lógica traducida fue rechazada.", graphReport, programResult.Report);
         var previous = JsonSerializer.Serialize(simulation.Active);
-        if (!simulation.RestoreProgramDefinition(JsonSerializer.Serialize(candidate)))
-            return new(false, "El runtime rechazó el programa; no se aplicó el gráfico.", graphReport, programResult.Report);
+        var previousGraph = documents.GetAsync(graph.ProgramId).GetAwaiter().GetResult();
         try
         {
             documents.SaveAsync(graph).GetAwaiter().GetResult();
+            if (!simulation.RestoreProgramDefinition(JsonSerializer.Serialize(candidate)))
+            {
+                if (previousGraph is null) documents.DeleteAsync(graph.ProgramId).GetAwaiter().GetResult();
+                else documents.SaveAsync(previousGraph).GetAwaiter().GetResult();
+                return new(false, "El runtime rechazó el programa; se restauró la persistencia anterior.", graphReport, programResult.Report);
+            }
             return new(true, "Gráfico aplicado y persistido.", graphReport, programResult.Report);
         }
         catch
         {
             simulation.RestoreProgramDefinition(previous);
+            if (previousGraph is null) documents.DeleteAsync(graph.ProgramId).GetAwaiter().GetResult();
+            else documents.SaveAsync(previousGraph).GetAwaiter().GetResult();
             throw;
         }
     }

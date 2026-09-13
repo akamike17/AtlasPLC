@@ -31,6 +31,7 @@ public interface IGraphDocumentRepository
 {
     Task<GraphDocument?> GetAsync(Guid programId, CancellationToken ct = default);
     Task SaveAsync(GraphDocument graph, CancellationToken ct = default);
+    Task DeleteAsync(Guid programId, CancellationToken ct = default);
 }
 
 /// <summary>Servicio de proyectos (sección 43). Delgado, sin lógica industrial.</summary>

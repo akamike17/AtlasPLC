@@ -20,4 +20,11 @@ public sealed class SqliteGraphDocumentRepository(SqliteStore store) : IGraphDoc
         cmd.Parameters.AddWithValue("$id", graph.ProgramId.ToString()); cmd.Parameters.AddWithValue("$v", graph.SchemaVersion); cmd.Parameters.AddWithValue("$json", AtlasJson.Serialize(graph)); cmd.Parameters.AddWithValue("$utc", DateTimeOffset.UtcNow.ToString("O"));
         await cmd.ExecuteNonQueryAsync(ct);
     }
+
+    public async Task DeleteAsync(Guid programId, CancellationToken ct = default)
+    {
+        using var conn = store.OpenConnection(); using var cmd = conn.CreateCommand();
+        cmd.CommandText = "DELETE FROM ProgramGraphs WHERE ProgramId=$id"; cmd.Parameters.AddWithValue("$id", programId.ToString());
+        await cmd.ExecuteNonQueryAsync(ct);
+    }
 }
