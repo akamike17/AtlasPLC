@@ -1,8 +1,9 @@
 using System.Net.Sockets;
+using AtlasSoftPlc.Targets;
 
-namespace AtlasSoftPlc.Targets;
+namespace AtlasSoftPlc.Web.Services;
 
-/// <summary>Implementación legacy del registro. La red queda fuera de los contratos; se conserva aquí para compatibilidad.</summary>
+/// <summary>Registro concreto de targets y probes locales; la capa de contratos no conoce red.</summary>
 public sealed class TargetRegistry : ITargetRegistry
 {
     private readonly IReadOnlyList<TargetDescriptor> _targets = new[]
@@ -20,15 +21,13 @@ public sealed class TargetRegistry : ITargetRegistry
         new TargetDescriptor { Id="modbus-online", DisplayName="Modbus Online I/O", Category=TargetCategory.OnlineIo, Description="Lectura y escritura Modbus online.", Capabilities=new TargetCapabilities(new[]{TargetCapability.ReadLiveData, TargetCapability.WriteLiveData, TargetCapability.ReadDiagnostics}), ImplementationState=TargetImplementationState.Partial, DeploymentMode=DeploymentMode.MonitorOnly },
         new TargetDescriptor { Id="external-simulator", DisplayName="External Simulator", Category=TargetCategory.ExternalSimulation, Description="Simulador externo configurable.", ImplementationState=TargetImplementationState.NotImplemented }
     };
-
     public IReadOnlyList<TargetDescriptor> GetAll() => _targets;
     public TargetDescriptor? Get(string id) => _targets.FirstOrDefault(x => string.Equals(x.Id, id, StringComparison.OrdinalIgnoreCase));
     public async Task<TargetRuntimeStatus> GetStatusAsync(string id, CancellationToken ct = default)
     {
-        var descriptor = Get(id);
-        if (descriptor is null) return new("Unsupported", "Target no registrado.");
+        var descriptor = Get(id); if (descriptor is null) return new("Unsupported", "Target no registrado.");
         var port = id.ToLowerInvariant() switch { "siemens-s7" => 1102, "rockwell-logix" => 44818, "mitsubishi-melsec" => 2000, "beckhoff-twincat" => 48898, "openplc" => 8443, _ => 0 };
-        if (port == 0) return new(descriptor.ImplementationState.ToString(), descriptor.DocumentationHint.Length == 0 ? "Requiere configuración." : descriptor.DocumentationHint);
+        if (port == 0) return new(descriptor.ImplementationState.ToString(), "Requiere configuración.");
         try { using var tcp = new TcpClient(); await tcp.ConnectAsync("127.0.0.1", port, ct); return new("Detected", $"Servicio accesible en 127.0.0.1:{port}; sólo prueba de disponibilidad."); }
         catch (Exception ex) when (ex is SocketException or OperationCanceledException) { return new("NotConfigured", $"Servicio no accesible en 127.0.0.1:{port}."); }
     }

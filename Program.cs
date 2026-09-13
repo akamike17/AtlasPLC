@@ -9,6 +9,7 @@ using AtlasSoftPlc.Runtime.Hosting;
 using AtlasSoftPlc.Web.Hubs;
 using AtlasSoftPlc.Web.Auth;
 using AtlasSoftPlc.Targets;
+using AtlasSoftPlc.Web.Services;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.DataProtection.KeyManagement;
