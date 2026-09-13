@@ -1,4 +1,5 @@
 using AtlasSoftPlc.Application.Services;
+using AtlasSoftPlc.Application.Validation;
 using AtlasSoftPlc.Targets;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -7,7 +8,7 @@ using System.Diagnostics;
 namespace AtlasSoftPlc.Web.Controllers;
 
 [Authorize]
-public sealed class LabController(ITargetRegistry targets, PlcProgramService programs) : Controller
+public sealed class LabController(ITargetRegistry targets, PlcProgramService programs, IProgramValidationPipeline pipeline) : Controller
 {
     public async Task<IActionResult> Index(CancellationToken ct)
     {
@@ -25,6 +26,12 @@ public sealed class LabController(ITargetRegistry targets, PlcProgramService pro
     {
         var program = await programs.GetByIdAsync(programId, ct);
         if (program is null) return NotFound();
+        var validation = pipeline.Validate(program.Logic, program.Variables.ToDictionary(v => v.Id), ValidationOperation.Simulation, new ValidationContext { SafeStates = program.Failsafe });
+        if (!validation.Allowed)
+        {
+            TempData["LabResult"] = $"{program.Name}: BLOQUEADO antes del runner. " + string.Join(" ", validation.Report.Issues.Select(i => i.Message).Take(3));
+            return RedirectToAction(nameof(Index));
+        }
         var result = await LabProtocolRunner.RunAsync(targetId, program, ct);
         TempData["LabResult"] = $"{program.Name}: {result}";
         return RedirectToAction(nameof(Index));
@@ -39,6 +46,8 @@ public sealed class LabController(ITargetRegistry targets, PlcProgramService pro
         var failures = new List<string>();
         foreach (var program in catalog)
         {
+            var validation = pipeline.Validate(program.Logic, program.Variables.ToDictionary(v => v.Id), ValidationOperation.Simulation, new ValidationContext { SafeStates = program.Failsafe });
+            if (!validation.Allowed) { failures.Add($"{program.Name}: BLOQUEADO por validación"); continue; }
             var result = await LabProtocolRunner.RunAsync(targetId, program, ct);
             if (result.StartsWith("PASS:", StringComparison.Ordinal)) passed++;
             else failures.Add($"{program.Name}: {result}");
