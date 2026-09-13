@@ -62,6 +62,7 @@ builder.Services.AddSingleton<IGraphLowerer, GraphLowerer>();
 builder.Services.AddSingleton<IGraphDocumentRepository, SqliteGraphDocumentRepository>();
 builder.Services.AddScoped<IProgramValidationPipeline, ProgramValidationPipeline>();
 builder.Services.AddSingleton<ITargetRegistry, TargetRegistry>();
+builder.Services.AddSingleton<ITargetConfigurationProvider, SqliteTargetConfigurationProvider>();
 
 // Antiforgery para APIs JSON (sección de seguridad): token esperado en el header.
 builder.Services.AddAntiforgery(options =>

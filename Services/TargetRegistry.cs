@@ -4,7 +4,7 @@ using AtlasSoftPlc.Targets;
 namespace AtlasSoftPlc.Web.Services;
 
 /// <summary>Registro concreto de targets y probes locales; la capa de contratos no conoce red.</summary>
-public sealed class TargetRegistry : ITargetRegistry
+public sealed class TargetRegistry(ITargetConfigurationProvider configuration) : ITargetRegistry
 {
     private readonly IReadOnlyList<TargetDescriptor> _targets = new[]
     {
@@ -26,7 +26,8 @@ public sealed class TargetRegistry : ITargetRegistry
     public async Task<TargetRuntimeStatus> GetStatusAsync(string id, CancellationToken ct = default)
     {
         var descriptor = Get(id); if (descriptor is null) return new("Unsupported", "Target no registrado.");
-        var port = id.ToLowerInvariant() switch { "siemens-s7" => 1102, "rockwell-logix" => 44818, "mitsubishi-melsec" => 2000, "beckhoff-twincat" => 48898, "openplc" => 8443, _ => 0 };
+        var effective = configuration.Get(id);
+        var port = effective?.Port ?? 0;
         if (port == 0) return new(descriptor.ImplementationState.ToString(), "Requiere configuración.");
         try { using var tcp = new TcpClient(); await tcp.ConnectAsync("127.0.0.1", port, ct); return new("Detected", $"Servicio accesible en 127.0.0.1:{port}; sólo prueba de disponibilidad."); }
         catch (Exception ex) when (ex is SocketException or OperationCanceledException) { return new("NotConfigured", $"Servicio no accesible en 127.0.0.1:{port}."); }
