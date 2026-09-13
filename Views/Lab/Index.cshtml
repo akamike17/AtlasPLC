@@ -2,7 +2,7 @@
 @{ ViewData["Title"] = "Laboratorio de conectores"; }
 <div class="mb-3">
     <h1>Laboratorio de conectores</h1>
-    <p class="text-muted">Casos persistidos disponibles para validar el canal online. El estado se obtiene del probe del target.</p>
+    <p class="text-muted">Uso interno: un perfil ejecuta un probe de protocolo por target. El resultado nunca se presenta como PASS de programa PLC.</p>
 </div>
 @if (TempData["LabResult"] is string result) { <div class="alert alert-info">@result</div> }
 <div class="table-responsive"><table class="table table-sm align-middle">
@@ -23,10 +23,9 @@
 </tbody></table></div>
 <h2 class="h5 mt-4">Batería completa</h2>
 <div class="d-flex flex-wrap gap-2">
-@foreach (var target in Model.Targets.Where(t => t.Id is "siemens-s7" or "rockwell-logix" or "mitsubishi-melsec" or "omron-sysmac" or "beckhoff-twincat"))
+@foreach (var profile in Model.Profiles)
 {
-    var status = Model.Statuses[target.Id];
-    @if (status.State is "Detected" or "Assisted") { <form asp-action="RunAll" method="post"><input type="hidden" name="targetId" value="@target.Id" /><button class="btn btn-success" type="submit">Ejecutar 10 casos en @target.DisplayName</button></form> }
+    <form asp-action="RunAll" method="post"><input type="hidden" name="targetId" value="@profile.Id" /><button class="btn btn-success" type="submit">Ejecutar probe en @profile.DisplayName</button></form>
 }
 </div>
-<p class="small text-muted">Esta matriz no convierte un probe de transporte en un despliegue de programa. Las operaciones de escritura deben ejecutarse desde un adapter online validado.</p>
+<p class="small text-muted">La configuración de ejecutables, argumentos, working directory y timeout vive en LabProfiles; las operaciones de escritura deben ejecutarse desde un adapter online validado.</p>

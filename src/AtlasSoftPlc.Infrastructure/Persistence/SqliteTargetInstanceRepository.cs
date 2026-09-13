@@ -43,6 +43,16 @@ public sealed class SqliteTargetInstanceRepository(SqliteStore store) : ITargetI
         await cmd.ExecuteNonQueryAsync(ct);
     }
 
+    public async Task DeleteAsync(string instanceId, CancellationToken ct = default)
+    {
+        if (string.IsNullOrWhiteSpace(instanceId)) return;
+        using var conn = store.OpenConnection();
+        using var cmd = conn.CreateCommand();
+        cmd.CommandText = "DELETE FROM TargetInstances WHERE Id=$id";
+        cmd.Parameters.AddWithValue("$id", instanceId);
+        await cmd.ExecuteNonQueryAsync(ct);
+    }
+
     private static TargetInstance Read(Microsoft.Data.Sqlite.SqliteDataReader reader)
     {
         var config = JsonSerializer.Deserialize<Dictionary<string, string>>(reader.GetString(3))

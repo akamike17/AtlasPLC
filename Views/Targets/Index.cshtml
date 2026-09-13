@@ -1,22 +1,94 @@
 @model AtlasSoftPlc.Web.Controllers.TargetsViewModel
 @using AtlasSoftPlc.Targets
 @{ ViewData["Title"] = "Targets"; }
-<div class="d-flex justify-content-between align-items-center mb-3"><div><h1>Targets</h1><p class="text-muted mb-0">Selecciona dónde quieres llevar el proyecto. Las acciones reflejan capacidades reales.</p></div></div>
-<div class="row g-3">
-@foreach (var target in Model.Targets)
-{
-    <div class="col-12 col-md-6 col-xl-4"><div class="card h-100 shadow-sm">
-        @{ var status = Model.Statuses[target.Id]; }
-        <div class="card-body"><div class="d-flex justify-content-between gap-2"><h5>@target.DisplayName</h5><span class="badge text-bg-secondary">@target.ImplementationState</span></div>
-        <div class="small text-muted mb-2">@target.Category · @target.DeploymentMode</div><p>@target.Description</p>
-        <div class="small mb-2"><strong>Probe:</strong> @status.State — @status.Detail</div>
-        <div class="small mb-3 text-muted">Evidencia reproducible: docs/CONNECTOR_TEST_EVIDENCE.md</div>
-        <div class="small mb-3"><strong>Capacidades:</strong> @(target.Capabilities.IsEmpty ? "Ninguna declarada" : string.Join(", ", target.Capabilities.All))</div>
-        <div class="small text-muted">Formatos: @(target.SupportedArtifactKinds.Count == 0 ? "—" : string.Join(", ", target.SupportedArtifactKinds))</div></div>
-        <div class="card-footer bg-transparent"><button class="btn btn-outline-primary btn-sm configure-target" type="button" data-target="@target.Id">Configurar conexión</button><div class="target-config mt-3" data-config-for="@target.Id" hidden><form asp-action="SaveConfiguration" method="post">@Html.AntiForgeryToken()<input type="hidden" name="targetId" value="@target.Id" /><label class="form-label small">Endpoint / host</label><input name="endpoint" class="form-control form-control-sm config-endpoint" value="@(Model.Configurations.TryGetValue(target.Id, out var saved) ? saved.Endpoint : "127.0.0.1")" placeholder="127.0.0.1" /><div class="row g-2 mt-1"><div class="col"><label class="form-label small">Puerto</label><input name="port" type="number" min="1" max="65535" class="form-control form-control-sm config-port" value="@(Model.Configurations.TryGetValue(target.Id, out saved) ? saved.Port : (target.Id.Contains("modbus", StringComparison.OrdinalIgnoreCase) ? 502 : 0))" /></div><div class="col"><label class="form-label small">Timeout ms</label><input name="timeoutMs" type="number" min="100" max="60000" class="form-control form-control-sm" value="@(Model.Configurations.TryGetValue(target.Id, out saved) ? saved.TimeoutMs : 1500)" /></div></div><button type="submit" class="btn btn-sm btn-success mt-2">Guardar configuración</button></form><span class="small text-muted ms-2 config-result"></span></div></div>
-    </div></div>
-}
+
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <div><h1>Targets</h1><p class="text-muted mb-0">El catálogo describe plugins; las instancias configuradas son las únicas seleccionables por un proyecto.</p></div>
 </div>
+@if (TempData["TargetMessage"] is string message) { <div class="alert alert-info" role="status">@message</div> }
+
+<section class="card shadow-sm mb-4" aria-labelledby="target-catalog-title">
+    <div class="card-header bg-dark text-white d-flex justify-content-between align-items-center">
+        <strong id="target-catalog-title">TARGET CATALOG</strong><span class="badge text-bg-secondary">@Model.Targets.Count plugins</span>
+    </div>
+    <div class="card-body">
+        <p class="small text-muted">Estado del plugin, capacidades y formato disponible. Configurar aquí no crea una instancia automáticamente.</p>
+        <div class="row g-3">
+        @foreach (var target in Model.Targets)
+        {
+            var status = Model.Statuses[target.Id];
+            <div class="col-12 col-md-6 col-xl-4">
+                <article class="border rounded p-3 h-100" data-target-plugin="@target.Id">
+                    <div class="d-flex justify-content-between gap-2"><h5 class="mb-1">@target.DisplayName</h5><span class="badge text-bg-secondary">@target.ImplementationState</span></div>
+                    <div class="small text-muted mb-2">@target.Category · @target.DeploymentMode</div>
+                    <p class="small mb-2">@target.Description</p>
+                    <div class="small mb-2"><strong>Estado catálogo:</strong> @status.State</div>
+                    <div class="small text-muted mb-2"><strong>Capacidades:</strong> @(target.Capabilities.IsEmpty ? "Ninguna" : string.Join(", ", target.Capabilities.All))</div>
+                    <div class="small text-muted">Formatos: @(target.SupportedArtifactKinds.Count == 0 ? "—" : string.Join(", ", target.SupportedArtifactKinds))</div>
+                    <button class="btn btn-sm btn-outline-primary mt-3 create-instance-button" type="button" data-plugin="@target.Id">Crear instancia</button>
+                </article>
+            </div>
+        }
+        </div>
+    </div>
+</section>
+
+<section class="card shadow-sm mb-4" id="create-instance-panel" hidden aria-labelledby="create-instance-title">
+    <div class="card-header bg-primary text-white"><strong id="create-instance-title">CREAR INSTANCIA CONFIGURADA</strong></div>
+    <div class="card-body">
+        <form asp-action="CreateInstance" method="post" class="row g-2 align-items-end">
+            @Html.AntiForgeryToken()
+            <div class="col-12 col-md-3"><label class="form-label small" for="target-plugin-id">Plugin</label><select id="target-plugin-id" name="targetPluginId" class="form-select" required>@foreach (var target in Model.Targets) { <option value="@target.Id">@target.DisplayName</option> }</select></div>
+            <div class="col-12 col-md-3"><label class="form-label small" for="target-display-name">Nombre de instancia</label><input id="target-display-name" name="displayName" class="form-control" placeholder="Siemens Línea 1" required /></div>
+            <div class="col-12 col-md-2"><label class="form-label small" for="target-endpoint">Endpoint / host</label><input id="target-endpoint" name="endpoint" class="form-control" placeholder="127.0.0.1" /></div>
+            <div class="col-6 col-md-1"><label class="form-label small" for="target-port">Puerto</label><input id="target-port" name="port" type="number" min="1" max="65535" class="form-control" /></div>
+            <div class="col-6 col-md-1"><label class="form-label small" for="target-timeout">Timeout</label><input id="target-timeout" name="timeoutMs" type="number" min="100" max="60000" value="1500" class="form-control" /></div>
+            <div class="col-12 col-md-3"><label class="form-label small" for="target-base-url">Base URL (OpenPLC opcional)</label><input id="target-base-url" name="baseUrl" class="form-control" placeholder="http://127.0.0.1:8080" /></div>
+            <div class="col-12 col-md-2 form-check ms-2"><input id="target-self-signed" name="allowSelfSigned" value="true" type="checkbox" class="form-check-input" /><label class="form-check-label small" for="target-self-signed">Aceptar autofirmado</label></div>
+            <div class="col-12 col-md-2"><label class="form-label small" for="target-credential">Referencia credencial</label><input id="target-credential" name="credentialReference" class="form-control" placeholder="Opcional" /></div>
+            <div class="col-12"><button class="btn btn-success" type="submit">Guardar instancia</button> <button class="btn btn-outline-secondary" type="button" id="cancel-create-instance">Cancelar</button><span class="small text-muted ms-2">La contraseña no se guarda en texto plano.</span></div>
+        </form>
+    </div>
+</section>
+
+<section class="card shadow-sm" aria-labelledby="configured-targets-title">
+    <div class="card-header bg-light d-flex justify-content-between align-items-center"><strong id="configured-targets-title">CONFIGURED INSTANCES</strong><span class="badge text-bg-primary">@Model.ConfiguredInstances.Count instancias</span></div>
+    <div class="card-body">
+    @if (Model.ConfiguredInstances.Count == 0)
+    {
+        <p class="text-muted mb-0">No hay instancias configuradas. Selecciona “Crear instancia” en el catálogo.</p>
+    }
+    else
+    {
+        <div class="row g-3">
+        @foreach (var configured in Model.ConfiguredInstances)
+        {
+            var instance = configured.Instance;
+            var plugin = configured.Plugin;
+            <div class="col-12 col-lg-6">
+                <article class="border rounded p-3 h-100" data-target-instance="@instance.Id">
+                    <div class="d-flex justify-content-between gap-2"><div><h5 class="mb-1">@instance.DisplayName</h5><div class="small text-muted"><code>@instance.Id</code> · @(plugin?.DisplayName ?? instance.TargetPluginId)</div></div><span class="badge @(configured.Status.State is "Detected" or "Ready" ? "text-bg-success" : configured.Status.State is "Partial" or "Assisted" ? "text-bg-warning" : "text-bg-secondary")">@configured.Status.State</span></div>
+                    <p class="small mt-2 mb-2">@configured.Status.Detail</p>
+                    <div class="small text-muted mb-2">Plugin: @instance.TargetPluginId · Endpoint: @(instance.Configuration.TryGetValue("endpoint", out var endpoint) ? endpoint : "local"):@(instance.Configuration.TryGetValue("port", out var port) ? port : "—")</div>
+                    <div class="d-flex flex-wrap gap-2">
+                        <button class="btn btn-sm btn-outline-primary edit-instance-button" type="button" data-instance="@instance.Id">Editar</button>
+                        <form asp-action="TestConnection" method="post" class="d-inline">@Html.AntiForgeryToken()<input type="hidden" name="instanceId" value="@instance.Id" /><button class="btn btn-sm btn-outline-success" type="submit">Probar conexión</button></form>
+                        <form asp-action="DeleteInstance" method="post" class="d-inline" onsubmit="return confirm('¿Eliminar esta instancia configurada?');">@Html.AntiForgeryToken()<input type="hidden" name="instanceId" value="@instance.Id" /><button class="btn btn-sm btn-outline-danger" type="submit">Eliminar</button></form>
+                    </div>
+                    <form asp-action="SaveConfiguration" method="post" class="instance-edit mt-3" data-edit-instance="@instance.Id" hidden>
+                        @Html.AntiForgeryToken()<input type="hidden" name="instanceId" value="@instance.Id" />
+                        <div class="row g-2"><div class="col-md-4"><label class="form-label small">Endpoint / host</label><input name="endpoint" class="form-control form-control-sm" value="@(instance.Configuration.TryGetValue("endpoint", out endpoint) ? endpoint : "")" /></div><div class="col-md-2"><label class="form-label small">Puerto</label><input name="port" type="number" min="1" max="65535" class="form-control form-control-sm" value="@(instance.Configuration.TryGetValue("port", out port) ? port : "0")" /></div><div class="col-md-2"><label class="form-label small">Timeout ms</label><input name="timeoutMs" type="number" min="100" max="60000" class="form-control form-control-sm" value="@(instance.Configuration.TryGetValue("timeoutMs", out var timeout) ? timeout : "1500")" /></div><div class="col-md-2"><label class="form-label small">Base URL</label><input name="baseUrl" class="form-control form-control-sm" value="@(instance.Configuration.TryGetValue("baseUrl", out var baseUrl) ? baseUrl : "")" /></div><div class="col-md-1 form-check"><input name="allowSelfSigned" value="true" type="checkbox" class="form-check-input" id="self-signed-@instance.Id" @(instance.Configuration.TryGetValue("allowSelfSigned", out var selfSigned) && selfSigned.Equals("true", StringComparison.OrdinalIgnoreCase) ? "checked" : "") /><label class="form-check-label small" for="self-signed-@instance.Id">TLS</label></div><div class="col-md-1 d-flex align-items-end"><button class="btn btn-sm btn-success w-100" type="submit">Guardar</button></div></div>
+                    </form>
+                </article>
+            </div>
+        }
+        </div>
+    }
+    </div>
+</section>
+
 <script>
-document.querySelectorAll('.configure-target').forEach(b => b.addEventListener('click', () => { const p=document.querySelector(`[data-config-for="${b.dataset.target}"]`); p.hidden=!p.hidden; }));
+document.querySelectorAll('.create-instance-button').forEach(button => button.addEventListener('click', () => { const panel=document.getElementById('create-instance-panel'); panel.hidden=false; document.getElementById('target-plugin-id').value=button.dataset.plugin; panel.scrollIntoView({behavior:'smooth',block:'center'}); document.getElementById('target-display-name').focus(); }));
+document.getElementById('cancel-create-instance')?.addEventListener('click', () => document.getElementById('create-instance-panel').hidden=true);
+document.querySelectorAll('.edit-instance-button').forEach(button => button.addEventListener('click', () => { const form=document.querySelector(`[data-edit-instance="${button.dataset.instance}"]`); form.hidden=!form.hidden; }));
 </script>

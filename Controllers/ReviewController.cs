@@ -9,7 +9,7 @@ using System.Text.Json;
 namespace AtlasSoftPlc.Web.Controllers;
 
 [Authorize]
-public sealed class ReviewController(SimulationService simulation, ProgramVersionService versions, IProgramValidationPipeline pipeline, IProgramTargetSelectionRepository selections, ITargetRegistry targets, TargetDeploymentWorkflow deployment) : Controller
+public sealed class ReviewController(SimulationService simulation, ProgramVersionService versions, IProgramValidationPipeline pipeline, IProgramTargetSelectionRepository selections, ITargetInstanceRepository instances, ITargetPluginRegistry plugins, TargetDeploymentWorkflow deployment) : Controller
 {
     public IActionResult Index()
     {
@@ -77,7 +77,8 @@ public sealed class ReviewController(SimulationService simulation, ProgramVersio
             return RedirectToAction(nameof(Index));
         }
         var targetId = selections.GetAsync(program.Id).GetAwaiter().GetResult();
-        if (string.IsNullOrWhiteSpace(targetId) || targets.Get(targetId) is null)
+        var target = string.IsNullOrWhiteSpace(targetId) ? null : instances.GetAsync(targetId).GetAwaiter().GetResult();
+        if (target is null || plugins.Get(target.TargetPluginId) is null)
         {
             TempData["ReviewMessage"] = "Envío detenido: selecciona un target válido para este programa antes de desplegar.";
             return RedirectToAction(nameof(Index));
@@ -96,9 +97,10 @@ public sealed class ReviewController(SimulationService simulation, ProgramVersio
         if (program is null) return NotFound("No hay programa activo.");
         if (request.ProjectId != program.Id) return BadRequest("La confirmación no corresponde al programa activo.");
         var targetId = await selections.GetAsync(program.Id, ct);
-        if (string.IsNullOrWhiteSpace(targetId) || targets.Get(targetId) is null)
+        var target = string.IsNullOrWhiteSpace(targetId) ? null : await instances.GetAsync(targetId, ct);
+        if (target is null || plugins.Get(target.TargetPluginId) is null)
             return BadRequest("No hay un target válido seleccionado para el programa activo.");
-        var result = await deployment.DeployAsync(targetId, program, request, ct);
+        var result = await deployment.DeployAsync(target!.Id, program, request, ct);
         if (!result.Succeeded) return BadRequest(new { result.State, result.Message });
         TempData["ReviewMessage"] = result.Message;
         return RedirectToAction(nameof(Index));

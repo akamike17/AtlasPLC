@@ -1,23 +1,27 @@
+using System.Diagnostics;
 using AtlasSoftPlc.Application.Services;
 using AtlasSoftPlc.Application.Validation;
 using AtlasSoftPlc.Targets;
+using AtlasSoftPlc.Web.Services;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
-using System.Diagnostics;
 
 namespace AtlasSoftPlc.Web.Controllers;
 
 [Authorize]
-public sealed class LabController(ITargetRegistry targets, PlcProgramService programs, IProgramValidationPipeline pipeline, IProgramTargetSelectionRepository selections) : Controller
+public sealed class LabController(
+    ITargetRegistry targets,
+    PlcProgramService programs,
+    IProgramValidationPipeline pipeline,
+    ILabProfileRegistry profiles) : Controller
 {
     public async Task<IActionResult> Index(CancellationToken ct)
     {
         var catalog = await programs.GetAllAsync(ct);
         var statuses = new Dictionary<string, TargetRuntimeStatus>(StringComparer.OrdinalIgnoreCase);
-        foreach (var target in targets.GetAll())
-            statuses[target.Id] = await targets.GetStatusAsync(target.Id, ct);
-
-        return View(new LabViewModel(catalog, targets.GetAll(), statuses));
+        foreach (var profile in profiles.GetAll())
+            statuses[profile.TargetPluginId] = await targets.GetStatusAsync(profile.TargetPluginId, ct);
+        return View(new LabViewModel(catalog, targets.GetAll(), statuses, profiles.GetAll()));
     }
 
     [HttpPost]
@@ -26,20 +30,19 @@ public sealed class LabController(ITargetRegistry targets, PlcProgramService pro
     {
         var program = await programs.GetByIdAsync(programId, ct);
         if (program is null) return NotFound();
-        if (string.IsNullOrWhiteSpace(targetId)) targetId = await selections.GetAsync(programId, ct) ?? string.Empty;
-        if (targets.Get(targetId) is null)
+        var profile = profiles.Get(targetId);
+        if (profile is null)
         {
-            TempData["LabResult"] = $"{program.Name}: BLOQUEADO; selecciona un target válido para este programa.";
+            TempData["LabResult"] = $"{targetId}: BLOQUEADO; no existe un perfil de laboratorio configurado.";
             return RedirectToAction(nameof(Index));
         }
         var validation = pipeline.Validate(program.Logic, program.Variables.ToDictionary(v => v.Id), ValidationOperation.Simulation, new ValidationContext { SafeStates = program.Failsafe });
         if (!validation.Allowed)
         {
-            TempData["LabResult"] = $"{program.Name}: BLOQUEADO antes del runner. " + string.Join(" ", validation.Report.Issues.Select(i => i.Message).Take(3));
+            TempData["LabResult"] = $"{profile.DisplayName}: BLOQUEADO antes del probe. " + string.Join(" ", validation.Report.Issues.Select(i => i.Message).Take(3));
             return RedirectToAction(nameof(Index));
         }
-        var result = await LabProtocolRunner.RunAsync(targetId, program, ct);
-        TempData["LabResult"] = $"{program.Name}: {result}";
+        TempData["LabResult"] = $"{profile.DisplayName}: {await LabProtocolRunner.RunAsync(profile, ct)}";
         return RedirectToAction(nameof(Index));
     }
 
@@ -47,19 +50,14 @@ public sealed class LabController(ITargetRegistry targets, PlcProgramService pro
     [ValidateAntiForgeryToken]
     public async Task<IActionResult> RunAll(string targetId, CancellationToken ct)
     {
-        var catalog = await programs.GetAllAsync(ct);
-        var passed = 0;
-        var failures = new List<string>();
-        foreach (var program in catalog)
+        var profile = profiles.Get(targetId);
+        if (profile is null)
         {
-            var validation = pipeline.Validate(program.Logic, program.Variables.ToDictionary(v => v.Id), ValidationOperation.Simulation, new ValidationContext { SafeStates = program.Failsafe });
-            if (!validation.Allowed) { failures.Add($"{program.Name}: BLOQUEADO por validación"); continue; }
-            var result = await LabProtocolRunner.RunAsync(targetId, program, ct);
-            if (result.StartsWith("PASS:", StringComparison.Ordinal)) passed++;
-            else failures.Add($"{program.Name}: {result}");
+            TempData["LabResult"] = $"{targetId}: BLOQUEADO; no existe un perfil de laboratorio configurado.";
+            return RedirectToAction(nameof(Index));
         }
-        TempData["LabResult"] = $"{targetId}: {passed}/{catalog.Count} casos PASS." +
-            (failures.Count == 0 ? "" : " Fallos: " + string.Join(" | ", failures));
+        // Un probe por target/perfil; jamás se multiplica en falsos PASS de programa.
+        TempData["LabResult"] = $"{profile.DisplayName}: {await LabProtocolRunner.RunAsync(profile, ct)}";
         return RedirectToAction(nameof(Index));
     }
 }
@@ -67,33 +65,81 @@ public sealed class LabController(ITargetRegistry targets, PlcProgramService pro
 public sealed record LabViewModel(
     IReadOnlyList<AtlasSoftPlc.Domain.Projects.PlcProgramDefinition> Programs,
     IReadOnlyList<TargetDescriptor> Targets,
-    IReadOnlyDictionary<string, TargetRuntimeStatus> Statuses);
+    IReadOnlyDictionary<string, TargetRuntimeStatus> Statuses,
+    IReadOnlyList<LabProfile> Profiles);
 
-internal static class LabProtocolRunner
+public sealed record LabProfile
 {
-    public static async Task<string> RunAsync(string targetId, AtlasSoftPlc.Domain.Projects.PlcProgramDefinition program, CancellationToken ct)
-    {
-        var (file, args, workingDirectory) = targetId.ToLowerInvariant() switch
-        {
-            "siemens-s7" => ("wsl.exe", new[] { "-d", "AtlasUbuntu", "-u", "root", "--", "python3", "/mnt/c/Users/Admin/source/repos/AtlasPLC/.runtime-simulators/snap7_probe.py" }, (string?)null),
-            "rockwell-logix" => ("wsl.exe", new[] { "-d", "AtlasUbuntu", "-u", "root", "--", "bash", "-lc", "python3 -m cpppo.server.enip.client -a 127.0.0.1:44818 -p 'Atlas_Start=(BOOL)1'" }, (string?)null),
-            "mitsubishi-melsec" => ("dotnet", new[] { "run", "--project", ".runtime-simulators\\SLMP\\SLMP.Examples\\SLMP.Examples.csproj", "--no-restore", "--", "127.0.0.1", "2000" }, (string?)null),
-            "omron-sysmac" => ("wsl.exe", new[] { "-d", "AtlasUbuntu", "-u", "root", "--", "bash", "-lc", "cd /mnt/c/Users/Admin/source/repos/AtlasPLC/.runtime-simulators/gofins && go run ./example" }, (string?)null),
-            "beckhoff-twincat" => ("dotnet", new[] { "run", "--project", ".runtime-simulators\\AdsProbe\\AdsProbe.csproj", "--no-restore" }, (string?)null),
-            _ => throw new ArgumentException("Target de laboratorio no soportado.", nameof(targetId))
-        };
+    public required string Id { get; init; }
+    public required string TargetPluginId { get; init; }
+    public required string DisplayName { get; init; }
+    public required string Executable { get; init; }
+    public IReadOnlyList<string> Arguments { get; init; } = Array.Empty<string>();
+    public string? WorkingDirectory { get; init; }
+    public int TimeoutSeconds { get; init; } = 30;
+}
 
-        var psi = new ProcessStartInfo(file) { WorkingDirectory = workingDirectory ?? Directory.GetCurrentDirectory(), RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false, CreateNoWindow = true };
+public interface ILabProfileRegistry
+{
+    IReadOnlyList<LabProfile> GetAll();
+    LabProfile? Get(string id);
+}
+
+public sealed class ConfigurationLabProfileRegistry(IConfiguration configuration) : ILabProfileRegistry
+{
+    private readonly IReadOnlyList<LabProfile> _profiles = Load(configuration);
+    public IReadOnlyList<LabProfile> GetAll() => _profiles;
+    public LabProfile? Get(string id) => _profiles.FirstOrDefault(p => string.Equals(p.Id, id, StringComparison.OrdinalIgnoreCase) || string.Equals(p.TargetPluginId, id, StringComparison.OrdinalIgnoreCase));
+
+    private static IReadOnlyList<LabProfile> Load(IConfiguration configuration)
+    {
+        return configuration.GetSection("LabProfiles").GetChildren().Select(child => new LabProfile
+        {
+            Id = child["Id"] ?? child.Key,
+            TargetPluginId = child["TargetPluginId"] ?? child.Key,
+            DisplayName = child["DisplayName"] ?? child.Key,
+            Executable = child["Executable"] ?? string.Empty,
+            Arguments = child.GetSection("Arguments").GetChildren().Select(x => x.Value ?? string.Empty).ToArray(),
+            WorkingDirectory = child["WorkingDirectory"],
+            TimeoutSeconds = int.TryParse(child["TimeoutSeconds"], out var seconds) && seconds > 0 ? seconds : 30
+        }).Where(p => !string.IsNullOrWhiteSpace(p.Executable)).ToArray();
+    }
+}
+
+public static class LabProtocolRunner
+{
+    public static async Task<string> RunAsync(LabProfile profile, CancellationToken ct)
+    {
+        var psi = new ProcessStartInfo(profile.Executable)
+        {
+            WorkingDirectory = string.IsNullOrWhiteSpace(profile.WorkingDirectory) ? Directory.GetCurrentDirectory() : profile.WorkingDirectory,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true
+        };
         psi.Environment["DOTNET_ROLL_FORWARD"] = "Major";
-        foreach (var arg in args) psi.ArgumentList.Add(arg);
-        using var process = Process.Start(psi) ?? throw new InvalidOperationException("No se pudo iniciar el runner de laboratorio.");
-        var outputTask = process.StandardOutput.ReadToEndAsync(ct);
-        var errorTask = process.StandardError.ReadToEndAsync(ct);
-        await process.WaitForExitAsync(ct);
-        var output = await outputTask;
-        var error = await errorTask;
-        if (process.ExitCode != 0) return $"FAIL (exit {process.ExitCode}): {Trim(error)}";
-        return $"PASS: {Trim(output)}";
+        foreach (var arg in profile.Arguments) psi.ArgumentList.Add(arg);
+        try
+        {
+            using var process = Process.Start(psi) ?? throw new InvalidOperationException("No se pudo iniciar el probe de laboratorio.");
+            using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+            timeout.CancelAfter(TimeSpan.FromSeconds(Math.Clamp(profile.TimeoutSeconds, 1, 600)));
+            var outputTask = process.StandardOutput.ReadToEndAsync(timeout.Token);
+            var errorTask = process.StandardError.ReadToEndAsync(timeout.Token);
+            await process.WaitForExitAsync(timeout.Token);
+            var output = await outputTask;
+            var error = await errorTask;
+            return process.ExitCode == 0 ? $"PROTOCOL PROBE PASS: {Trim(output)}" : $"PROTOCOL PROBE FAIL (exit {process.ExitCode}): {Trim(error)}";
+        }
+        catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+        {
+            return "PROTOCOL PROBE FAIL: timeout del perfil.";
+        }
+        catch (Exception ex)
+        {
+            return $"PROTOCOL PROBE FAIL: {ex.Message}";
+        }
     }
 
     private static string Trim(string text) => string.Join(" ", text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries)).Trim();

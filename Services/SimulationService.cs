@@ -257,27 +257,37 @@ public sealed class SimulationService
                 return false;
 
             // 1. Actualizar estado local del servicio (catálogo en memoria de la UI).
-            _active = program;
-            _variables.Clear();
-            foreach (var v in program.Variables)
-                _variables[v.Id] = v;
-            _program = program.Logic;
-            _inputValues.Clear();
-            foreach (var v in program.Variables.Where(x => x.Direction == VariableDirection.Input))
-                _inputValues[v.Id] = Runtime(v.Id, false);
-
-            Project = new Project
-            {
-                Name = program.Name,
-                Description = program.Description,
-                Mode = RuntimeMode.Simulation,
-                LifecycleState = ProjectLifecycleState.SimulationReady
-            };
-
-            // 2. Reemplazo transaccional en el runtime (single-writer, atómico).
+            // Reemplazar primero el runtime evita anunciar un programa activo que el
+            // motor no pudo instalar. El estado de la UI se actualiza sólo después.
             var replaced = _runtime.ReplaceProgramAsync(program, autoStart: true).GetAwaiter().GetResult();
+            if (!replaced) return false;
+            SetActiveState(program);
+            return true;
+        }
+    }
 
-            return replaced;
+    /// <summary>
+    /// Instala un candidato sólo en runtime y memoria. La unidad de trabajo de
+    /// aplicación gráfica persiste después; si ese commit falla, este mismo método
+    /// restaura el programa anterior sin escribir una compensación parcial en SQLite.
+    /// </summary>
+    public bool TryApplyRuntimeCandidate(PlcProgramDefinition program)
+    {
+        lock (_lock)
+        {
+            if (_catalog.All(p => p.Id != program.Id)) return false;
+            try
+            {
+                if (!_runtime.ReplaceProgramAsync(program, autoStart: true).GetAwaiter().GetResult()) return false;
+            }
+            catch (Exception)
+            {
+                return false;
+            }
+            var index = _catalog.FindIndex(p => p.Id == program.Id);
+            _catalog[index] = program;
+            SetActiveState(program);
+            return true;
         }
     }
 
@@ -311,6 +321,13 @@ public sealed class SimulationService
 
     private void LoadProgramCore(PlcProgramDefinition program)
     {
+        SetActiveState(program);
+
+        _runtime.ReplaceProgramAsync(program, autoStart: true).GetAwaiter().GetResult();
+    }
+
+    private void SetActiveState(PlcProgramDefinition program)
+    {
         _active = program;
         _variables.Clear();
         foreach (var v in program.Variables)
@@ -328,8 +345,6 @@ public sealed class SimulationService
             Mode = RuntimeMode.Simulation,
             LifecycleState = ProjectLifecycleState.SimulationReady
         };
-
-        _runtime.ReplaceProgramAsync(program, autoStart: true).GetAwaiter().GetResult();
     }
 
     private static RuntimeValue Runtime(Guid id, bool value) => new()

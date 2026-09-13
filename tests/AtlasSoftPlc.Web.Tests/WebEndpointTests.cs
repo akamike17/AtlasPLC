@@ -1,4 +1,6 @@
 using System.Net;
+using System.Text;
+using System.Text.Json;
 using System.Text.RegularExpressions;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
@@ -152,6 +154,92 @@ public sealed class WebEndpointTests : IClassFixture<AtlasWebFactory>
     }
 
     [Fact]
+    public async Task E2E_CreateGraph_SelectIec_GenerateAndToggleRuntime()
+    {
+        using var isolatedFactory = new AtlasWebFactory();
+        using var client = isolatedFactory.CreateClient(new WebApplicationFactoryClientOptions { AllowAutoRedirect = false });
+        Assert.True(await LoginAsync(client, AdminUser, TestPassword));
+
+        var initial = await client.GetAsync("/Home/Simulation");
+        var html = await initial.Content.ReadAsStringAsync();
+        var programMatch = Regex.Match(html, "name=\"programId\" value=\"([0-9a-fA-F-]{36})\"");
+        Assert.True(programMatch.Success, "La simulación debe exponer el programa activo.");
+        var programId = Guid.Parse(programMatch.Groups[1].Value);
+        var inputId = Guid.NewGuid();
+        var outputId = Guid.NewGuid();
+        var graph = JsonSerializer.Serialize(new
+        {
+            nodes = new[]
+            {
+                new { id = inputId.ToString(), name = "StartGraph", kind = "input" },
+                new { id = outputId.ToString(), name = "MotorGraph", kind = "output" }
+            },
+            edges = new[] { new { from = inputId.ToString(), to = outputId.ToString() } }
+        });
+        var apply = await client.PostAsync("/Home/ApplyGraph", new FormUrlEncodedContent(new Dictionary<string, string>
+        {
+            ["__RequestVerificationToken"] = ExtractAntiforgeryToken(html),
+            ["graphJson"] = graph
+        }));
+        Assert.Equal(HttpStatusCode.Redirect, apply.StatusCode);
+
+        var applied = await client.GetAsync("/Home/Simulation");
+        var appliedHtml = await applied.Content.ReadAsStringAsync();
+        Assert.Contains("Diseño gráfico validado y aplicado", System.Net.WebUtility.HtmlDecode(appliedHtml));
+
+        var select = await client.PostAsync("/Targets/SelectForProgram", new FormUrlEncodedContent(new Dictionary<string, string>
+        {
+            ["__RequestVerificationToken"] = ExtractAntiforgeryToken(appliedHtml),
+            ["programId"] = programId.ToString(),
+            ["targetId"] = "iec-st-local"
+        }));
+        Assert.Equal(HttpStatusCode.Redirect, select.StatusCode);
+
+        var artifact = await client.GetAsync($"/Artifacts/Generate?id={programId}&kind=StructuredText");
+        var artifactHtml = await artifact.Content.ReadAsStringAsync();
+        Assert.Contains("Generated", artifactHtml);
+        Assert.Contains("StructuredText", artifactHtml);
+
+        var inputResponse = await SetInputAsync(client, inputId, true);
+        Assert.Equal(HttpStatusCode.OK, inputResponse.StatusCode);
+        Assert.True(await WaitForOutputAsync(client, outputId, true));
+        inputResponse = await SetInputAsync(client, inputId, false);
+        Assert.Equal(HttpStatusCode.OK, inputResponse.StatusCode);
+        Assert.True(await WaitForOutputAsync(client, outputId, false));
+    }
+
+    [Fact]
+    public async Task Review_Send_ResolvesPersistedTargetInstance()
+    {
+        using var isolatedFactory = new AtlasWebFactory();
+        using var client = isolatedFactory.CreateClient(new WebApplicationFactoryClientOptions { AllowAutoRedirect = false });
+        Assert.True(await LoginAsync(client, AdminUser, TestPassword));
+
+        var simulation = await client.GetAsync("/Home/Simulation");
+        var html = await simulation.Content.ReadAsStringAsync();
+        var programMatch = Regex.Match(html, "name=\"programId\" value=\"([0-9a-fA-F-]{36})\"");
+        Assert.True(programMatch.Success, "La simulación debe exponer el programa activo.");
+
+        var select = await client.PostAsync("/Targets/SelectForProgram", new FormUrlEncodedContent(new Dictionary<string, string>
+        {
+            ["__RequestVerificationToken"] = ExtractAntiforgeryToken(html),
+            ["programId"] = programMatch.Groups[1].Value,
+            ["targetId"] = "iec-st-local"
+        }));
+        Assert.Equal(HttpStatusCode.Redirect, select.StatusCode);
+
+        var review = await client.GetAsync("/Review");
+        var reviewHtml = await review.Content.ReadAsStringAsync();
+        var send = await client.PostAsync("/Review/Send", new FormUrlEncodedContent(new Dictionary<string, string>
+        {
+            ["__RequestVerificationToken"] = ExtractAntiforgeryToken(reviewHtml)
+        }));
+
+        Assert.Equal(HttpStatusCode.Redirect, send.StatusCode);
+        Assert.Equal("/Home/Simulation", send.Headers.Location?.OriginalString);
+    }
+
+    [Fact]
     public async Task Simulation_ExponeCapacidadesRealesYBloqueaDeployModbus()
     {
         using var client = NewClient();
@@ -217,5 +305,28 @@ public sealed class WebEndpointTests : IClassFixture<AtlasWebFactory>
         var start = idx + "\"token\":\"".Length;
         var end = json.IndexOf('"', start);
         return json[start..end];
+    }
+
+    private static async Task<HttpResponseMessage> SetInputAsync(HttpClient client, Guid id, bool value)
+    {
+        var token = await GetCsrfTokenAsync(client);
+        var request = new HttpRequestMessage(HttpMethod.Post, $"/api/runtime/inputs/{id}")
+        {
+            Content = new StringContent(JsonSerializer.Serialize(new { value }), Encoding.UTF8, "application/json")
+        };
+        request.Headers.Add("X-CSRF-TOKEN", token);
+        return await client.SendAsync(request);
+    }
+
+    private static async Task<bool> WaitForOutputAsync(HttpClient client, Guid outputId, bool expected)
+    {
+        for (var i = 0; i < 20; i++)
+        {
+            using var document = JsonDocument.Parse(await (await client.GetAsync("/api/runtime/snapshot")).Content.ReadAsStringAsync());
+            if (document.RootElement.TryGetProperty("outputs", out var outputs) && outputs.TryGetProperty(outputId.ToString(), out var output) && output.TryGetProperty("value", out var value) && value.TryGetProperty("raw", out var raw) && raw.ValueKind == JsonValueKind.True == expected)
+                return true;
+            await Task.Delay(50);
+        }
+        return false;
     }
 }

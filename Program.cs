@@ -14,6 +14,7 @@ using AtlasSoftPlc.Web.Hubs;
 using AtlasSoftPlc.Web.Auth;
 using AtlasSoftPlc.Targets;
 using AtlasSoftPlc.Web.Services;
+using AtlasSoftPlc.Web.Controllers;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.DataProtection.KeyManagement;
@@ -64,18 +65,26 @@ builder.Services.AddMemoryCache();
 builder.Services.AddSingleton<IGraphValidator, GraphValidator>();
 builder.Services.AddSingleton<IGraphLowerer, GraphLowerer>();
 builder.Services.AddSingleton<IGraphDocumentRepository, SqliteGraphDocumentRepository>();
+builder.Services.AddSingleton<IGraphApplyUnitOfWork, SqliteGraphApplyUnitOfWork>();
 builder.Services.AddScoped<IProgramValidationPipeline, ProgramValidationPipeline>();
 builder.Services.AddSingleton<ITargetRegistry, TargetRegistry>();
 builder.Services.AddSingleton<ITargetConfigurationProvider, SqliteTargetConfigurationProvider>();
 TargetPluginCatalog.AddBuiltIns(builder.Services);
+builder.Services.AddSingleton<IOpenPlcRuntimeClient>(_ => new OpenPlcRuntimeClient());
+builder.Services.AddSingleton<ITargetPlugin, OpenPlcTargetPlugin>();
+ToolchainCatalog.AddBuiltIns(builder.Services);
+builder.Services.AddSingleton<IToolchainRegistry, ToolchainRegistry>();
 builder.Services.AddScoped<GraphApplicationService>();
 builder.Services.AddSingleton<StructuredTextEmitter>();
 builder.Services.AddSingleton<PlcOpenXmlEmitter>();
 builder.Services.AddScoped<ArtifactPipeline>();
 builder.Services.AddScoped<TargetDeploymentWorkflow>();
+builder.Services.AddScoped<ITargetWorkflowExecutor, TargetWorkflowExecutor>();
+builder.Services.AddSingleton<ILabProfileRegistry, ConfigurationLabProfileRegistry>();
 // Adapters concretos compuestos por DI; Modbus sólo expone I/O online, no deployment.
 builder.Services.AddSingleton<AtlasRuntimeTargetAdapter>();
 builder.Services.AddSingleton<ModbusOnlineAdapter>();
+builder.Services.AddSingleton<IOnlineIoProvider>(sp => sp.GetRequiredService<ModbusOnlineAdapter>().OnlineIoProvider);
 builder.Services.AddSingleton<IPlcTargetAdapter>(sp => sp.GetRequiredService<AtlasRuntimeTargetAdapter>());
 builder.Services.AddSingleton<IPlcTargetAdapter>(sp => sp.GetRequiredService<ModbusOnlineAdapter>());
 builder.Services.AddSingleton<ITargetPlugin>(sp => new AdapterTargetPlugin(sp.GetRequiredService<AtlasRuntimeTargetAdapter>(), sp.GetRequiredService<ITargetConfigurationProvider>(), "atlas-simulation"));
@@ -127,6 +136,7 @@ builder.Services.AddSingleton<IProgramVersionRepository, SqliteProgramVersionRep
 builder.Services.AddSingleton<IPlcProgramRepository, SqlitePlcProgramRepository>();
 builder.Services.AddSingleton<IProgramTargetSelectionRepository, SqliteProgramTargetSelectionRepository>();
 builder.Services.AddSingleton<ITargetInstanceRepository, SqliteTargetInstanceRepository>();
+builder.Services.AddScoped<ITargetRuntimeStatusService, TargetRuntimeStatusService>();
 builder.Services.AddSingleton<IArtifactStore, SqliteArtifactStore>();
 
 // ---- Health checks (readiness/liveness) ----
@@ -229,6 +239,33 @@ app.Services.GetRequiredService<AtlasSoftPlc.Web.Auth.UserSeeder>().SeedIfEmpty(
 // Sincronizar la biblioteca inicial antes de servir la UI. Es idempotente:
 // conserva programas existentes y agrega únicamente los proyectos faltantes.
 app.Services.GetRequiredService<AtlasSoftPlc.Web.Services.SimulationService>().EnsureLibrary();
+// La simulación local es una instancia real del runtime interno, no una entrada
+// artificial del catálogo. Se crea una sola vez para que un proyecto nuevo tenga
+// un destino seleccionable desde el primer arranque.
+var targetInstanceStore = app.Services.GetRequiredService<ITargetInstanceRepository>();
+var configuredTargetIds = targetInstanceStore.GetAllAsync().GetAwaiter().GetResult()
+    .Select(x => x.Id)
+    .ToHashSet(StringComparer.OrdinalIgnoreCase);
+if (!configuredTargetIds.Contains("atlas-simulation-local"))
+{
+    targetInstanceStore.SaveAsync(new TargetInstance
+    {
+        Id = "atlas-simulation-local",
+        TargetPluginId = "atlas-simulation",
+        TargetType = "atlas-simulation",
+        DisplayName = "Atlas Simulation Local"
+    }).GetAwaiter().GetResult();
+}
+if (!configuredTargetIds.Contains("iec-st-local"))
+{
+    targetInstanceStore.SaveAsync(new TargetInstance
+    {
+        Id = "iec-st-local",
+        TargetPluginId = "iec-st",
+        TargetType = "iec-st",
+        DisplayName = "IEC Structured Text Export Local"
+    }).GetAwaiter().GetResult();
+}
 
 if (!app.Environment.IsDevelopment())
 {

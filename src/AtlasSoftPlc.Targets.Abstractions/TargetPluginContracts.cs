@@ -15,6 +15,7 @@ public interface ITargetPlugin : ITargetDescriptorProvider, ITargetConfiguration
 {
     ITargetStatusProvider StatusProvider { get; }
     IReadOnlyList<TargetActionDescriptor> Actions { get; }
+    ITargetActionProvider? ActionProvider => null;
     ITargetWorkflowProvider WorkflowProvider => new DefaultTargetWorkflowProvider(this);
 }
 
@@ -26,6 +27,12 @@ public interface ITargetStatusProvider
 public interface ITargetActionProvider
 {
     Task<TargetActionResult> ExecuteAsync(TargetInstance instance, string actionId, TargetActionRequest request, CancellationToken ct = default);
+}
+
+/// <summary>Permite que un plugin operativo exponga su adapter sin resolver vendors en el core.</summary>
+public interface ITargetAdapterProvider
+{
+    IPlcTargetAdapter Adapter { get; }
 }
 
 public sealed record TargetInstance
@@ -48,7 +55,12 @@ public sealed record TargetActionDescriptor(string Id, string DisplayName, strin
     public int Order { get; init; }
 }
 
-public sealed record TargetWorkflowStep(string ActionId, string DisplayName, bool Optional = false);
+public sealed record TargetWorkflowStep(string ActionId, string DisplayName, bool Optional = false)
+{
+    public string RequiredState { get; init; } = "Ready";
+    public IReadOnlyList<TargetCapability> RequiredCapabilities { get; init; } = Array.Empty<TargetCapability>();
+    public bool RequiresConfirmation { get; init; }
+}
 public sealed record TargetWorkflowDefinition(string Id, string DisplayName, IReadOnlyList<TargetWorkflowStep> Steps);
 
 /// <summary>Flujo declarado por un plugin; la UI puede iterar pasos sin conocer el vendor.</summary>
@@ -59,11 +71,22 @@ public interface ITargetWorkflowProvider
 
 public sealed class DefaultTargetWorkflowProvider(ITargetPlugin plugin) : ITargetWorkflowProvider
 {
-    public TargetWorkflowDefinition Workflow { get; } = new(plugin.Descriptor.Id, plugin.Descriptor.DisplayName, plugin.Actions.Select(a => new TargetWorkflowStep(a.Id, a.DisplayName)).ToList());
+    public TargetWorkflowDefinition Workflow { get; } = new(plugin.Descriptor.Id, plugin.Descriptor.DisplayName, plugin.Actions.Select(a => new TargetWorkflowStep(a.Id, a.DisplayName)
+    {
+        RequiredState = a.RequiredState,
+        RequiredCapabilities = a.RequiredCapabilities,
+        RequiresConfirmation = a.RequiresConfirmation
+    }).ToList());
 }
 public sealed record TargetConfigurationField(string Key, string DisplayName, string Type, bool Required = false, string? DefaultValue = null, bool Secret = false);
 public sealed record TargetActionRequest(IReadOnlyDictionary<string, string> Parameters);
 public sealed record TargetActionResult(bool Succeeded, string Message, IReadOnlyDictionary<string, string>? Data = null);
+public sealed record TargetWorkflowExecutionResult(bool Succeeded, string State, string Message, TargetActionResult? ActionResult = null);
+
+public interface ITargetWorkflowExecutor
+{
+    Task<TargetWorkflowExecutionResult> ExecuteAsync(string instanceId, string actionId, TargetActionRequest request, CancellationToken ct = default);
+}
 
 /// <summary>Registro compuesto: los plugins se agregan por DI, no por una lista vendor-céntrica.</summary>
 public interface ITargetPluginRegistry

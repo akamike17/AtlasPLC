@@ -25,7 +25,7 @@ public sealed class CatalogTargetPlugin(TargetDescriptor descriptor, ITargetConf
         {
             if (!probeNetwork)
                 return new TargetRuntimeStatus(descriptor.ImplementationState.ToString(), descriptor.Description);
-            var effective = configuration.Get(instance.TargetType);
+            var effective = configuration.Get(instance.Id);
             if (effective is null || effective.Port == 0)
                 return new TargetRuntimeStatus(descriptor.ImplementationState.ToString(), "Requiere configuración de endpoint, puerto y timeout.");
             if (string.IsNullOrWhiteSpace(effective.Endpoint))
@@ -52,7 +52,6 @@ public static class TargetPluginCatalog
     {
         Add(services, new TargetDescriptor { Id = "iec-st", DisplayName = "Generic IEC Structured Text", Category = TargetCategory.EngineeringExport, Description = "Exportación IEC Structured Text.", Capabilities = new TargetCapabilities(new[] { TargetCapability.GenerateSource, TargetCapability.ExportProject }), SupportedArtifactKinds = new[] { "StructuredText" }, ImplementationState = TargetImplementationState.Ready, DeploymentMode = DeploymentMode.ExportOnly });
         Add(services, new TargetDescriptor { Id = "plcopen-xml", DisplayName = "Generic PLCopen XML", Category = TargetCategory.EngineeringExport, Description = "Intercambio PLCopen XML.", Capabilities = new TargetCapabilities(new[] { TargetCapability.GenerateProject, TargetCapability.ExportProject }), SupportedArtifactKinds = new[] { "PlcOpenXml" }, ImplementationState = TargetImplementationState.Partial, DeploymentMode = DeploymentMode.ExportOnly });
-        Add(services, new TargetDescriptor { Id = "openplc", DisplayName = "OpenPLC Runtime", Manufacturer = "OpenPLC", Category = TargetCategory.PlcRuntime, Description = "Runtime IEC externo; requiere API verificada y configuración del usuario.", ImplementationState = TargetImplementationState.NotConfigured, DeploymentMode = DeploymentMode.Assisted }, true);
         Add(services, new TargetDescriptor { Id = "codesys", DisplayName = "CODESYS", Manufacturer = "CODESYS", Category = TargetCategory.PlcRuntime, Description = "Runtime y entorno CODESYS; requiere toolchain del proveedor.", ImplementationState = TargetImplementationState.NotImplemented, DeploymentMode = DeploymentMode.Assisted });
         Add(services, new TargetDescriptor { Id = "siemens-s7", DisplayName = "Siemens S7-1200 / S7-1500", Manufacturer = "Siemens", Category = TargetCategory.PhysicalPlc, Description = "PLC Siemens; requiere TIA Portal y adapter compatible.", ImplementationState = TargetImplementationState.NotImplemented, DeploymentMode = DeploymentMode.Assisted }, true);
         Add(services, new TargetDescriptor { Id = "rockwell-logix", DisplayName = "Rockwell Logix", Manufacturer = "Rockwell", Category = TargetCategory.PhysicalPlc, Description = "Canal EtherNet/IP CIP asistido; no suplanta Studio 5000.", Capabilities = new TargetCapabilities(new[] { TargetCapability.ReadLiveData, TargetCapability.WriteLiveData, TargetCapability.Discover }), ImplementationState = TargetImplementationState.Assisted, DeploymentMode = DeploymentMode.Assisted }, true);

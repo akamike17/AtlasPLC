@@ -59,16 +59,22 @@ public sealed class GraphLowerer : IGraphLowerer
     private static ExpressionNode BuildExpression(Guid nodeId, GraphDocument graph, IReadOnlyDictionary<Guid, VariableDefinition> variables, HashSet<Guid> visiting)
     {
         if (!visiting.Add(nodeId)) throw new InvalidOperationException("El gráfico contiene un ciclo inválido.");
-        var node = graph.Nodes.Single(x => x.Id == nodeId);
-        if (variables.TryGetValue(nodeId, out var variable)) return new VariableExpression { VariableId = variable.Id, VariableKey = variable.Key };
-        var incoming = graph.Edges.Where(x => x.ToNodeId == nodeId).ToList();
-        ExpressionNode result = node.Kind switch
+        try
         {
-            GraphNodeKind.Not when incoming.Count == 1 => new NotExpression { Operand = BuildExpression(incoming[0].FromNodeId, graph, variables, visiting) },
-            GraphNodeKind.And => new AndExpression { Operands = incoming.Select(x => BuildExpression(x.FromNodeId, graph, variables, visiting)).ToList() },
-            GraphNodeKind.Or => new OrExpression { Operands = incoming.Select(x => BuildExpression(x.FromNodeId, graph, variables, visiting)).ToList() },
-            _ => throw new InvalidOperationException($"El tipo de nodo '{node.Kind}' aún no tiene lowering implementado.")
-        };
-        visiting.Remove(nodeId); return result;
+            var node = graph.Nodes.Single(x => x.Id == nodeId);
+            if (variables.TryGetValue(nodeId, out var variable)) return new VariableExpression { VariableId = variable.Id, VariableKey = variable.Key };
+            var incoming = graph.Edges.Where(x => x.ToNodeId == nodeId).ToList();
+            return node.Kind switch
+            {
+                GraphNodeKind.Not when incoming.Count == 1 => new NotExpression { Operand = BuildExpression(incoming[0].FromNodeId, graph, variables, visiting) },
+                GraphNodeKind.And => new AndExpression { Operands = incoming.Select(x => BuildExpression(x.FromNodeId, graph, variables, visiting)).ToList() },
+                GraphNodeKind.Or => new OrExpression { Operands = incoming.Select(x => BuildExpression(x.FromNodeId, graph, variables, visiting)).ToList() },
+                _ => throw new InvalidOperationException($"El tipo de nodo '{node.Kind}' aún no tiene lowering implementado.")
+            };
+        }
+        finally
+        {
+            visiting.Remove(nodeId);
+        }
     }
 }

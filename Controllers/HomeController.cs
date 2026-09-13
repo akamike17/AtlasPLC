@@ -5,7 +5,6 @@ using System.Globalization;
 using AtlasSoftPlc.Application.Services;
 using AtlasSoftPlc.Application.Graph;
 using AtlasSoftPlc.Application.Validation;
-using AtlasSoftPlc.Application.Packages;
 using AtlasSoftPlc.Domain.Graph;
 using AtlasSoftPlc.Domain.Projects;
 using AtlasSoftPlc.Domain.Runtime;
@@ -28,11 +27,12 @@ public class HomeController : Controller
     private readonly ProgramVersionService _versions;
     private readonly GraphApplicationService _graphApplication;
     private readonly IProgramTargetSelectionRepository _selections;
-    private readonly ArtifactPipeline _artifacts;
     private readonly ITargetPluginRegistry _pluginRegistry;
     private readonly IGraphDocumentRepository _graphDocuments;
+    private readonly ITargetInstanceRepository _targetInstances;
+    private readonly ITargetRuntimeStatusService _targetStatus;
 
-    public HomeController(RuntimeStateStore store, PlcRuntimeService runtime, SimulationService sim, ModbusIoService modbus, ITargetRegistry targets, ProgramVersionService versions, GraphApplicationService graphApplication, ArtifactPipeline artifacts, IProgramTargetSelectionRepository selections, ITargetPluginRegistry pluginRegistry, IGraphDocumentRepository graphDocuments)
+    public HomeController(RuntimeStateStore store, PlcRuntimeService runtime, SimulationService sim, ModbusIoService modbus, ITargetRegistry targets, ProgramVersionService versions, GraphApplicationService graphApplication, IProgramTargetSelectionRepository selections, ITargetPluginRegistry pluginRegistry, IGraphDocumentRepository graphDocuments, ITargetInstanceRepository targetInstances, ITargetRuntimeStatusService targetStatus)
     {
         _store = store;
         _runtime = runtime;
@@ -41,10 +41,11 @@ public class HomeController : Controller
         _targets = targets;
         _versions = versions;
         _graphApplication = graphApplication;
-        _artifacts = artifacts;
         _selections = selections;
         _pluginRegistry = pluginRegistry;
         _graphDocuments = graphDocuments;
+        _targetInstances = targetInstances;
+        _targetStatus = targetStatus;
     }
 
     private void EnsureDemo()
@@ -164,10 +165,9 @@ public class HomeController : Controller
         EnsureDemo();
         var project = _sim.Catalog.FirstOrDefault(p => p.Id == id);
         if (project is null) return NotFound();
-        var artifact = _artifacts.Generate(project, kind);
-        if (!artifact.Succeeded) return BadRequest(new { artifact.Kind, artifact.Diagnostics });
-        var extension = artifact.Kind == "PlcOpenXml" ? "xml" : "st";
-        return File(artifact.Content, artifact.Kind == "PlcOpenXml" ? "application/xml" : "text/plain", $"atlas-{project.Name.Replace(' ', '-')}.{extension}");
+        // Keep the legacy URL as a safe alias. Actual generation must pass through
+        // the target-aware pipeline so an instance selection cannot be bypassed.
+        return RedirectToAction("Generate", "Artifacts", new { id, kind });
     }
 
     [HttpPost]
@@ -250,8 +250,7 @@ public class HomeController : Controller
             }
             var applied = _graphApplication.Apply(graph);
             if (!applied.Succeeded) { TempData["BuilderMessage"] = applied.Message + " " + string.Join(" ", (applied.ProgramReport?.Issues.Select(x => x.Message) ?? applied.GraphReport.Diagnostics.Select(x => x.Message)).Take(3)); return RedirectToAction(nameof(Simulation)); }
-            SaveVersion("Diseño gráfico aplicado al proyecto");
-            TempData["BuilderMessage"] = "Diseño gráfico validado y aplicado al simulador en estado seguro.";
+            TempData["BuilderMessage"] = "Diseño gráfico validado y aplicado al simulador en estado seguro. Gráfico, programa y versión quedaron confirmados en una sola transacción.";
         }
         catch (JsonException) { TempData["BuilderMessage"] = "El diseño gráfico no es válido y no se aplicó."; }
         catch (KeyNotFoundException) { TempData["BuilderMessage"] = "El diseño gráfico está incompleto: cada bloque requiere id, nombre y tipo."; }
@@ -317,7 +316,8 @@ public class HomeController : Controller
     private DashboardViewModel BuildModel()
     {
         var descriptors = _targets.GetAll();
-        var statuses = descriptors.ToDictionary(t => t.Id, t => _targets.GetStatusAsync(t.Id).GetAwaiter().GetResult(), StringComparer.OrdinalIgnoreCase);
+        var configuredInstances = _targetInstances.GetAllAsync().GetAwaiter().GetResult();
+        var statuses = configuredInstances.ToDictionary(i => i.Id, i => _targetStatus.GetStatusAsync(i.Id).GetAwaiter().GetResult(), StringComparer.OrdinalIgnoreCase);
         var graph = _sim.Active is null ? null : _graphDocuments.GetAsync(_sim.Active.Id).GetAwaiter().GetResult();
         var graphJson = graph is null ? "null" : JsonSerializer.Serialize(graph, new JsonSerializerOptions
         {
@@ -335,7 +335,12 @@ public class HomeController : Controller
         ActiveProgramId = _sim.Active?.Id
         ,ModbusStatus = _modbus.ConnectionStatus
         ,ModbusError = _modbus.LastError
-        ,TargetActions = descriptors.Select(t => TargetActionsViewModel.From(t, statuses[t.Id], _pluginRegistry.Get(t.Id)?.Actions ?? Array.Empty<TargetActionDescriptor>())).ToArray()
+        ,TargetActions = configuredInstances.Select(instance =>
+        {
+            var plugin = _pluginRegistry.Get(instance.TargetPluginId);
+            var descriptor = plugin?.Descriptor ?? descriptors.FirstOrDefault(t => t.Id.Equals(instance.TargetPluginId, StringComparison.OrdinalIgnoreCase));
+            return descriptor is null ? null : TargetActionsViewModel.From(descriptor, statuses[instance.Id], plugin?.Actions ?? Array.Empty<TargetActionDescriptor>(), instance);
+        }).Where(x => x is not null).Select(x => x!).ToArray()
         ,TargetStatuses = statuses
         ,SelectedTargetId = _sim.Active is null ? null : _selections.GetAsync(_sim.Active.Id).GetAwaiter().GetResult()
         ,GraphJson = graphJson
@@ -372,6 +377,7 @@ public sealed class DashboardViewModel
 public sealed class TargetActionsViewModel
 {
     public string Id { get; init; } = string.Empty;
+    public string PluginId { get; init; } = string.Empty;
     public string Name { get; init; } = string.Empty;
     public bool Simulate { get; init; }
     public bool Monitor { get; init; }
@@ -384,10 +390,11 @@ public sealed class TargetActionsViewModel
     public string ConnectionState { get; init; } = "Unknown";
     public string ConnectionDetail { get; init; } = "";
 
-    public static TargetActionsViewModel From(TargetDescriptor target, TargetRuntimeStatus status, IReadOnlyList<TargetActionDescriptor> actions) => new()
+    public static TargetActionsViewModel From(TargetDescriptor target, TargetRuntimeStatus status, IReadOnlyList<TargetActionDescriptor> actions, TargetInstance? instance = null) => new()
     {
-        Id = target.Id,
-        Name = target.DisplayName,
+        Id = instance?.Id ?? target.Id,
+        PluginId = target.Id,
+        Name = instance?.DisplayName ?? target.DisplayName,
         Simulate = target.Capabilities.Supports(TargetCapability.Simulate),
         Monitor = target.Capabilities.Supports(TargetCapability.ReadLiveData),
         Generate = target.Capabilities.Supports(TargetCapability.GenerateSource) || target.Capabilities.Supports(TargetCapability.GenerateProject),

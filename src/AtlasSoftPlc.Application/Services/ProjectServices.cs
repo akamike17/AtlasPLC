@@ -40,6 +40,15 @@ public interface IProgramTargetSelectionRepository
     Task SaveAsync(Guid programId, string targetId, CancellationToken ct = default);
 }
 
+/// <summary>
+/// Unidad de persistencia atómica para aplicar un diseño gráfico. La implementación
+/// mantiene gráfico, programa y versión en la misma transacción de la base de datos.
+/// </summary>
+public interface IGraphApplyUnitOfWork
+{
+    Task CommitAsync(GraphDocument graph, PlcProgramDefinition program, ProgramVersion version, CancellationToken ct = default);
+}
+
 /// <summary>Servicio de proyectos (sección 43). Delgado, sin lógica industrial.</summary>
 public sealed class ProjectService
 {

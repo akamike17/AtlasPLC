@@ -15,7 +15,8 @@ public sealed class ArtifactsController(
     ArtifactPipeline pipeline,
     IArtifactStore artifacts,
     IProgramTargetSelectionRepository selections,
-    ITargetRegistry targets) : Controller
+    ITargetInstanceRepository instances,
+    ITargetPluginRegistry plugins) : Controller
 {
     [HttpGet]
     public async Task<IActionResult> Generate(Guid id, string kind = "StructuredText", CancellationToken ct = default)
@@ -24,15 +25,20 @@ public sealed class ArtifactsController(
         var program = simulation.Catalog.FirstOrDefault(p => p.Id == id);
         if (program is null) return NotFound();
 
-        var result = pipeline.Generate(program, kind);
         var targetId = await selections.GetAsync(program.Id, ct);
+        var target = string.IsNullOrWhiteSpace(targetId) ? null : await instances.GetAsync(targetId, ct);
+        var result = target is null
+            ? new ArtifactResult(kind, Array.Empty<byte>(), string.Empty, new[] { "Selecciona una instancia de target configurada antes de generar el artefacto." })
+            : pipeline.Generate(program, target, kind);
         var stored = new GeneratedArtifact(
             Guid.NewGuid(), program.Id, CanonicalProgramHasher.ComputeHash(program), targetId,
             result.Kind, FileName(program, result.Kind), result.Content, result.Hash,
             DateTimeOffset.UtcNow, result.Succeeded ? "Generated" : "Rejected", result.Diagnostics);
         await artifacts.SaveAsync(stored, ct);
 
-        var targetName = string.IsNullOrWhiteSpace(targetId) ? "Sin target seleccionado" : targets.Get(targetId)?.DisplayName ?? "Target no registrado";
+        var targetName = target is null
+            ? "Sin target seleccionado"
+            : plugins.Get(target.TargetPluginId)?.Descriptor.DisplayName ?? target.DisplayName;
         return View(new ArtifactGenerateViewModel(program, targetId, targetName, stored));
     }
 

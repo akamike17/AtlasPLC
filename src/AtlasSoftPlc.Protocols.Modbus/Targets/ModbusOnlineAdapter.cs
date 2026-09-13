@@ -30,6 +30,9 @@ public sealed class ModbusOnlineAdapter : PlcTargetAdapterBase
     {
     }
 
+    /// <summary>Operaciones online reales separadas del flujo de artefactos PLC.</summary>
+    public IOnlineIoProvider OnlineIoProvider { get; } = new ModbusOnlineIoProvider();
+
     public override TargetProfile Profile => new()
     {
         Identity = Identity,

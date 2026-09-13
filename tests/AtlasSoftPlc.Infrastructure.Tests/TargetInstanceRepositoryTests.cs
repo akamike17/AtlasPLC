@@ -6,7 +6,7 @@ namespace AtlasSoftPlc.Infrastructure.Tests;
 public sealed class TargetInstanceRepositoryTests
 {
     [Fact]
-    public async Task Saves_two_instances_of_the_same_plugin_without_colliding()
+    public async Task TwoInstancesSamePluginCanCoexist()
     {
         using var db = new TestDb();
         var repository = new SqliteTargetInstanceRepository(db.Store);
@@ -28,5 +28,15 @@ public sealed class TargetInstanceRepositoryTests
         Assert.Equal(2, instances.Count);
         Assert.Equal("10.0.0.11", (await repository.GetAsync("siemens-planta-1"))!.Configuration["endpoint"]);
         Assert.Equal("10.0.0.12", (await repository.GetAsync("siemens-planta-2"))!.Configuration["endpoint"]);
+    }
+
+    [Fact]
+    public async Task SelectionStoresInstanceIdNotPluginId()
+    {
+        using var db = new TestDb();
+        var repository = new SqliteProgramTargetSelectionRepository(db.Store);
+        var programId = Guid.NewGuid();
+        await repository.SaveAsync(programId, "siemens-planta-2");
+        Assert.Equal("siemens-planta-2", await repository.GetAsync(programId));
     }
 }
