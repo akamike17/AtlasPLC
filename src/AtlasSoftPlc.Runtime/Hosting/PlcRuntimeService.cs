@@ -30,6 +30,7 @@ public sealed class PlcRuntimeService : BackgroundService
     private readonly Stopwatch _monotonic = new();
     private readonly Stopwatch _scanWatch = new();
     private volatile bool _loopStarted;
+    private volatile bool _everStarted;
 
     private LogicProgram? _activeProgram;
     private string? _activeProgramHash;
@@ -92,6 +93,8 @@ public sealed class PlcRuntimeService : BackgroundService
         ct.ThrowIfCancellationRequested();
         if (!_loopStarted)
         {
+            if (_everStarted)
+                throw new InvalidOperationException("El runtime ya terminó su ciclo de vida y no acepta reemplazos.");
             ProcessReplaceProgram(program, autoStart);
             return true;
         }
@@ -182,6 +185,7 @@ public sealed class PlcRuntimeService : BackgroundService
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
+        _everStarted = true;
         _loopStarted = true;
         _logger.LogInformation("PlcRuntimeService iniciando");
         _monotonic.Start();
@@ -222,8 +226,16 @@ public sealed class PlcRuntimeService : BackgroundService
         {
             // shutdown normal
         }
-
-        await ShutdownAsync();
+        finally
+        {
+            await ShutdownAsync();
+            _loopStarted = false;
+            while (_commands.Reader.TryRead(out var pending))
+            {
+                if (pending is ReplaceProgramCommand replace)
+                    replace.Completion.TrySetException(new InvalidOperationException("El runtime terminó antes de procesar el reemplazo."));
+            }
+        }
     }
 
     /// <summary>

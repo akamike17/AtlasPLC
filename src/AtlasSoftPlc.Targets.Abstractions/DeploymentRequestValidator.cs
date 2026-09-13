@@ -32,10 +32,12 @@ public sealed class DeploymentRequestValidator : IDeploymentRequestValidator
     public static readonly TimeSpan DefaultTtl = TimeSpan.FromMinutes(5);
     private readonly IDeploymentNonceStore _nonces;
     private readonly TimeSpan _ttl;
+    private readonly IDeploymentConfirmationVerifier _confirmations;
 
-    public DeploymentRequestValidator(IDeploymentNonceStore nonces, TimeSpan? ttl = null)
+    public DeploymentRequestValidator(IDeploymentNonceStore nonces, IDeploymentConfirmationVerifier confirmations, TimeSpan? ttl = null)
     {
         _nonces = nonces ?? throw new ArgumentNullException(nameof(nonces));
+        _confirmations = confirmations ?? throw new ArgumentNullException(nameof(confirmations));
         _ttl = ttl ?? DefaultTtl;
     }
 
@@ -51,8 +53,13 @@ public sealed class DeploymentRequestValidator : IDeploymentRequestValidator
             return DeploymentValidationResult.Fail("DEPLOY-HASH-MISMATCH", "El hash del proyecto no coincide.");
         if (string.IsNullOrWhiteSpace(request.ConfirmationToken))
             return DeploymentValidationResult.Fail("DEPLOY-TOKEN-MISSING", "Falta confirmación de despliegue.");
+        if (string.IsNullOrWhiteSpace(request.ConfirmedBy) || string.IsNullOrWhiteSpace(request.SessionId))
+            return DeploymentValidationResult.Fail("DEPLOY-TOKEN-INVALID", "Falta identidad de usuario o sesión.");
         if (request.IssuedUtc > now || now - request.IssuedUtc > _ttl)
             return DeploymentValidationResult.Fail("DEPLOY-EXPIRED", "La solicitud de despliegue expiró.");
+        var expectedExpiry = request.IssuedUtc + _ttl;
+        if (!_confirmations.Verify(request.ConfirmationToken, new DeploymentConfirmationContext(request.ConfirmedBy, request.SessionId, project.Id, request.ProjectHash, target, request.Nonce, expectedExpiry)))
+            return DeploymentValidationResult.Fail("DEPLOY-TOKEN-INVALID", "La confirmación no coincide con usuario, sesión, proyecto, target, nonce o expiración.");
         if (!_nonces.TryConsume(request.Nonce))
             return DeploymentValidationResult.Fail("DEPLOY-REPLAY", "El nonce ya fue utilizado.");
         return DeploymentValidationResult.Pass();

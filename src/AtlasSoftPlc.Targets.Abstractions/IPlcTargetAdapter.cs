@@ -76,6 +76,8 @@ public sealed record DeploymentRequest
 
     /// <summary>Token de confirmación emitido por un flujo válido de confirmación.</summary>
     public required string ConfirmationToken { get; init; }
+    public string ConfirmedBy { get; init; } = string.Empty;
+    public string SessionId { get; init; } = string.Empty;
 
     /// <summary>Nonce único del flujo (anti-replay).</summary>
     public Guid Nonce { get; init; } = Guid.NewGuid();
