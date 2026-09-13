@@ -5,6 +5,8 @@ using AtlasSoftPlc.Domain.Runtime;
 using AtlasSoftPlc.Runtime.Hosting;
 using AtlasSoftPlc.Web.Models;
 using AtlasSoftPlc.Web.Services;
+using AtlasSoftPlc.Protocols.Modbus.Targets;
+using AtlasSoftPlc.Targets;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 
@@ -13,12 +15,14 @@ namespace AtlasSoftPlc.Web.Controllers;
 public class HomeController : Controller
 {
     private readonly RuntimeStateStore _store;
+    private readonly PlcRuntimeService _runtime;
     private readonly SimulationService _sim;
     private readonly ModbusIoService _modbus;
 
-    public HomeController(RuntimeStateStore store, SimulationService sim, ModbusIoService modbus)
+    public HomeController(RuntimeStateStore store, PlcRuntimeService runtime, SimulationService sim, ModbusIoService modbus)
     {
         _store = store;
+        _runtime = runtime;
         _sim = sim;
         _modbus = modbus;
     }
@@ -90,6 +94,11 @@ public class HomeController : Controller
         ActiveProgramId = _sim.Active?.Id
         ,ModbusStatus = _modbus.ConnectionStatus
         ,ModbusError = _modbus.LastError
+        ,TargetActions = new[]
+        {
+            TargetActionsViewModel.From(new AtlasSoftPlc.Runtime.Targets.AtlasRuntimeTargetAdapter(_runtime), "Atlas Runtime"),
+            TargetActionsViewModel.From(new ModbusOnlineAdapter(), "Modbus Online")
+        }
     };
 
     [ResponseCache(Duration = 0, Location = ResponseCacheLocation.None, NoStore = true)]
@@ -113,6 +122,29 @@ public sealed class DashboardViewModel
     public Guid? ActiveProgramId { get; set; }
     public string ModbusStatus { get; set; } = "Disabled";
     public string? ModbusError { get; set; }
+    public IReadOnlyList<TargetActionsViewModel> TargetActions { get; set; } = Array.Empty<TargetActionsViewModel>();
+}
+
+public sealed class TargetActionsViewModel
+{
+    public string Name { get; init; } = string.Empty;
+    public bool Simulate { get; init; }
+    public bool Monitor { get; init; }
+    public bool Generate { get; init; }
+    public bool Compile { get; init; }
+    public bool Deploy { get; init; }
+    public bool Verify { get; init; }
+
+    public static TargetActionsViewModel From(IPlcTargetAdapter target, string name) => new()
+    {
+        Name = name,
+        Simulate = target.Capabilities.Supports(TargetCapability.Simulate),
+        Monitor = target.Capabilities.Supports(TargetCapability.ReadLiveData),
+        Generate = target.Capabilities.Supports(TargetCapability.GenerateSource) || target.Capabilities.Supports(TargetCapability.GenerateProject),
+        Compile = target.Capabilities.Supports(TargetCapability.Compile),
+        Deploy = target.Capabilities.Supports(TargetCapability.DeployProgram) || target.Capabilities.Supports(TargetCapability.DeployHardware),
+        Verify = target.Capabilities.Supports(TargetCapability.VerifyDeployment)
+    };
 }
 
 public sealed class ProgramsViewModel

@@ -202,4 +202,35 @@ public sealed class PlantModelValidationTests
         var issues = new PlantModelValidationRule(new PlantModel { Components = new() { required, actuator } }).Validate(program, new[] { permission, motor }.ToDictionary(x => x.Id), new()).ToList();
         Assert.Contains(issues, i => i.DiagnosticId == "ATLAS-PLANT-0008" && i.Severity == ValidationSeverity.Blocker);
     }
+
+    [Fact]
+    public void DeclaredRequirementWithoutBindingProducesDiagnostic()
+    {
+        var requirement = new PlantComponent { VariableId = Guid.NewGuid(), SafeState = new() };
+        var actuator = new PlantComponent { VariableId = Guid.NewGuid(), Requires = new() { requirement.Id }, RequiresPhysicalPermission = true, SafeState = new() };
+        var issues = new PlantModelValidationRule(new PlantModel { Components = new() { requirement, actuator } })
+            .Validate(new LogicProgram(), new Dictionary<Guid, VariableDefinition>(), new()).ToList();
+
+        var issue = Assert.Single(issues, i => i.DiagnosticId == "ATLAS-PLANT-0011");
+        Assert.Equal(ValidationSeverity.Blocker, issue.Severity);
+        Assert.Contains(actuator.Id.ToString(), issue.Evidence);
+        Assert.Contains(requirement.Id.ToString(), issue.Evidence);
+        Assert.Contains("Vincula", issue.Hint);
+    }
+
+    [Fact]
+    public void ValidRequirementBindingAndPermissionPathsHaveNoBindingDiagnostics()
+    {
+        var permission = new VariableDefinition { Key = "Guard", Direction = VariableDirection.Input };
+        var motor = new VariableDefinition { Key = "Motor", Direction = VariableDirection.Output };
+        var required = new PlantComponent { VariableId = permission.Id, SafeState = new() };
+        var actuator = new PlantComponent { VariableId = motor.Id, SafeState = new() };
+        actuator.Requires.Add(required.Id);
+        actuator.RequirementBindings[required.Id] = permission.Id;
+        var program = new LogicProgram { Rules = new() { new() { Condition = new AndExpression { Operands = new() { new VariableExpression { VariableId = permission.Id } } }, Actions = new() { new SetOutputAction { VariableId = motor.Id, Value = "true" } } } } };
+
+        var issues = new PlantModelValidationRule(new PlantModel { Components = new() { required, actuator } })
+            .Validate(program, new[] { permission, motor }.ToDictionary(x => x.Id), new()).ToList();
+        Assert.DoesNotContain(issues, i => i.DiagnosticId is "ATLAS-PLANT-0008" or "ATLAS-PLANT-0011");
+    }
 }

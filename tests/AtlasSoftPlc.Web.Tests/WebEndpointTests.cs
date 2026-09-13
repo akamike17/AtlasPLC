@@ -127,6 +127,20 @@ public sealed class WebEndpointTests : IClassFixture<AtlasWebFactory>
     }
 
     [Fact]
+    public async Task Simulation_ExponeCapacidadesRealesYBloqueaDeployModbus()
+    {
+        using var client = NewClient();
+        Assert.True(await LoginAsync(client, AdminUser, TestPassword));
+
+        var body = await (await client.GetAsync("/Home/Simulation")).Content.ReadAsStringAsync();
+        Assert.Contains("Atlas Runtime", body);
+        Assert.Contains("Modbus Online", body);
+        Assert.Contains("Deploy físico permanece deshabilitado", body);
+        Assert.Contains("data-target=\"Modbus Online\"", body);
+        Assert.Contains("disabled=\"disabled\">Deploy", body);
+    }
+
+    [Fact]
     public async Task Diagnostics_Autenticado_Devuelve200()
     {
         using var client = NewClient();

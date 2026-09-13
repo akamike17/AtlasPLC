@@ -7,6 +7,25 @@
 <h2>Simulación — @Model.Project.Name</h2>
 <p class="text-muted">Modo: @rt.Mode · Scan: @rt.LastScanMs.ToString("F1") ms · Scans: @rt.TotalScans</p>
 
+<div class="card shadow-sm mb-4">
+    <div class="card-header bg-dark text-white">TARGET CAPABILITIES</div>
+    <div class="card-body">
+        @foreach (var target in Model.TargetActions)
+        {
+            <div class="d-flex flex-wrap align-items-center gap-2 mb-2" data-target="@target.Name">
+                <strong class="me-2">@target.Name</strong>
+                <button class="btn btn-sm btn-outline-primary" disabled="@(!target.Simulate)">Simulate</button>
+                <button class="btn btn-sm btn-outline-secondary" disabled="@(!target.Monitor)">Monitor</button>
+                <button class="btn btn-sm btn-outline-secondary" disabled="@(!target.Generate)">Generate</button>
+                <button class="btn btn-sm btn-outline-secondary" disabled="@(!target.Compile)">Compile</button>
+                <button class="btn btn-sm btn-outline-danger" disabled="@(!target.Deploy)">Deploy</button>
+                <button class="btn btn-sm btn-outline-secondary" disabled="@(!target.Verify)">Verify</button>
+            </div>
+        }
+        <p class="small text-muted mb-0">Deploy físico permanece deshabilitado hasta disponer de un target y toolchain verificables.</p>
+    </div>
+</div>
+
 <div class="row g-4">
     <div class="col-md-4">
         <div class="card shadow-sm">

@@ -30,7 +30,11 @@ public sealed class PlantModelValidationRule : IValidationRule
             foreach (var requirement in c.Requires)
             {
                 if (!c.RequirementBindings.TryGetValue(requirement, out var permission))
+                {
+                    var severity = c.RequiresPhysicalPermission ? ValidationSeverity.Blocker : ValidationSeverity.Warning;
+                    yield return Issue("ATLAS-PLANT-0011", severity, "Requisito físico declarado sin binding lógico verificable.", $"ComponentId={c.Id}, RequirementId={requirement}", "Vincula el requisito a una variable lógica verificable.", c.VariableId);
                     continue;
+                }
                 if (!variables.ContainsKey(permission))
                 {
                     yield return Issue("ATLAS-PLANT-0007", ValidationSeverity.Blocker, "Binding lógico del requisito inexistente.", $"ComponentId={c.Id}, Requirement={requirement}, PermissionVariable={permission}", "Declara la variable de permiso o corrige el binding.", c.VariableId);
