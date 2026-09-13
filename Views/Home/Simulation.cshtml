@@ -133,6 +133,7 @@
 <div class="alert alert-info shadow-sm" role="status">
     <strong>Simulación segura</strong> ejecuta tu lógica local en tiempo real. Cambia sensores y observa actuadores antes de revisar y enviar.
 </div>
+<div class="card border-primary mb-3"><div class="card-body d-flex align-items-end gap-2 flex-wrap"><form asp-controller="Targets" asp-action="SelectForProgram" method="post" class="d-flex align-items-end gap-2 flex-wrap">@Html.AntiForgeryToken()<input type="hidden" name="programId" value="@Model.ActiveProgramId" /><div><label class="form-label mb-1" for="selected-target">Target del proyecto</label><select id="selected-target" name="targetId" class="form-select"><option value="">Sin seleccionar</option>@foreach (var target in Model.TargetActions) { <option value="@target.Id" selected="@(Model.SelectedTargetId == target.Id)">@target.Name (@target.ConnectionState)</option> }</select></div><button type="submit" class="btn btn-primary">Guardar target</button></form><span class="small text-muted">La selección se persiste por proyecto.</span></div></div>
 <div class="visually-hidden" aria-hidden="true">
     <span>Atlas Runtime · Modbus Online · Deploy físico permanece deshabilitado hasta configurar y verificar un target físico.</span>
     <button type="button" data-target="Modbus Online" disabled="disabled">Deploy</button>

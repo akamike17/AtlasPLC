@@ -26,9 +26,10 @@ public class HomeController : Controller
     private readonly ITargetRegistry _targets;
     private readonly ProgramVersionService _versions;
     private readonly GraphApplicationService _graphApplication;
+    private readonly IProgramTargetSelectionRepository _selections;
     private readonly ArtifactPipeline _artifacts;
 
-    public HomeController(RuntimeStateStore store, PlcRuntimeService runtime, SimulationService sim, ModbusIoService modbus, ITargetRegistry targets, ProgramVersionService versions, GraphApplicationService graphApplication, ArtifactPipeline artifacts)
+    public HomeController(RuntimeStateStore store, PlcRuntimeService runtime, SimulationService sim, ModbusIoService modbus, ITargetRegistry targets, ProgramVersionService versions, GraphApplicationService graphApplication, ArtifactPipeline artifacts, IProgramTargetSelectionRepository selections)
     {
         _store = store;
         _runtime = runtime;
@@ -38,6 +39,7 @@ public class HomeController : Controller
         _versions = versions;
         _graphApplication = graphApplication;
         _artifacts = artifacts;
+        _selections = selections;
     }
 
     private void EnsureDemo()
@@ -313,6 +315,7 @@ public class HomeController : Controller
         ,ModbusError = _modbus.LastError
         ,TargetActions = descriptors.Select(t => TargetActionsViewModel.From(t, statuses[t.Id])).ToArray()
         ,TargetStatuses = statuses
+        ,SelectedTargetId = _sim.Active is null ? null : _selections.GetAsync(_sim.Active.Id).GetAwaiter().GetResult()
         };
     }
 
@@ -339,10 +342,12 @@ public sealed class DashboardViewModel
     public string? ModbusError { get; set; }
     public IReadOnlyList<TargetActionsViewModel> TargetActions { get; set; } = Array.Empty<TargetActionsViewModel>();
     public IReadOnlyDictionary<string, TargetRuntimeStatus> TargetStatuses { get; set; } = new Dictionary<string, TargetRuntimeStatus>();
+    public string? SelectedTargetId { get; set; }
 }
 
 public sealed class TargetActionsViewModel
 {
+    public string Id { get; init; } = string.Empty;
     public string Name { get; init; } = string.Empty;
     public bool Simulate { get; init; }
     public bool Monitor { get; init; }
@@ -356,6 +361,7 @@ public sealed class TargetActionsViewModel
 
     public static TargetActionsViewModel From(TargetDescriptor target, TargetRuntimeStatus status) => new()
     {
+        Id = target.Id,
         Name = target.DisplayName,
         Simulate = target.Capabilities.Supports(TargetCapability.Simulate),
         Monitor = target.Capabilities.Supports(TargetCapability.ReadLiveData),
