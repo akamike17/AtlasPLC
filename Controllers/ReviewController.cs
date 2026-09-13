@@ -1,6 +1,7 @@
 using AtlasSoftPlc.Application.Validation;
 using AtlasSoftPlc.Application.Services;
 using AtlasSoftPlc.Web.Services;
+using AtlasSoftPlc.Targets;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using System.Text.Json;
@@ -8,7 +9,7 @@ using System.Text.Json;
 namespace AtlasSoftPlc.Web.Controllers;
 
 [Authorize]
-public sealed class ReviewController(SimulationService simulation, ProgramVersionService versions, IProgramValidationPipeline pipeline) : Controller
+public sealed class ReviewController(SimulationService simulation, ProgramVersionService versions, IProgramValidationPipeline pipeline, IProgramTargetSelectionRepository selections, ITargetRegistry targets) : Controller
 {
     public IActionResult Index()
     {
@@ -73,6 +74,12 @@ public sealed class ReviewController(SimulationService simulation, ProgramVersio
         if (!result.Allowed)
         {
             TempData["ReviewMessage"] = "Envío detenido: corrige todos los hallazgos antes de continuar.";
+            return RedirectToAction(nameof(Index));
+        }
+        var targetId = selections.GetAsync(program.Id).GetAwaiter().GetResult();
+        if (string.IsNullOrWhiteSpace(targetId) || targets.Get(targetId) is null)
+        {
+            TempData["ReviewMessage"] = "Envío detenido: selecciona un target válido para este programa antes de desplegar.";
             return RedirectToAction(nameof(Index));
         }
         TempData["ReviewMessage"] = $"Proyecto '{program.Name}' validado. Regresando al simulador para observar la ejecución.";
