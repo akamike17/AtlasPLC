@@ -1,44 +1,155 @@
 @model AtlasSoftPlc.Web.Controllers.DashboardViewModel
 @{
-    ViewData["Title"] = "Simulación";
+    ViewData["Title"] = "Simulador";
     var rt = Model.Runtime;
+    var activeDefinition = Model.Catalog.FirstOrDefault(p => p.Id == Model.ActiveProgramId);
 }
 
-<h2>Simulación — @Model.Project.Name</h2>
+<h2>Simulador — @Model.Project.Name</h2>
 <p class="text-muted">Modo: @rt.Mode · Scan: @rt.LastScanMs.ToString("F1") ms · Scans: @rt.TotalScans</p>
+<div class="d-flex gap-2 flex-wrap mb-3"><span class="badge text-bg-primary">SIMULADOR LOCAL · ACTIVO</span><span class="badge text-bg-secondary">DEPLOY FÍSICO · BLOQUEADO</span><span class="small text-muted">El envío que ves abajo es al runtime de simulación, no al PLC físico.</span></div>
+<nav class="simulation-tabs mb-3" aria-label="Secciones del simulador">
+    <a class="btn btn-outline-primary" href="#projects-title" data-view="projects">Mis proyectos</a>
+    <a class="btn btn-outline-secondary" href="#templates-title" data-view="templates">Plantillas</a>
+    <a class="btn btn-primary" href="#editor-title" data-view="editor">Editor y simulador</a>
+</nav>
+@if (TempData["BuilderMessage"] is string builderMessage) { <div class="alert alert-warning" role="alert">@builderMessage</div> }
 
-<div class="card shadow-sm mb-4">
-    <div class="card-header bg-dark text-white">TARGET CAPABILITIES</div>
+<section class="card shadow-sm mb-4 simulation-view" data-view-panel="projects templates" aria-labelledby="projects-title">
+    <div class="card-header bg-dark text-white" id="projects-title">PROYECTOS · CRUD</div>
     <div class="card-body">
-        @foreach (var target in Model.TargetActions)
-        {
-            <div class="d-flex flex-wrap align-items-center gap-2 mb-2" data-target="@target.Name">
-                <strong class="me-2">@target.Name</strong>
-                <button class="btn btn-sm btn-outline-primary" disabled="@(!target.Simulate)">Simulate</button>
-                <button class="btn btn-sm btn-outline-secondary" disabled="@(!target.Monitor)">Monitor</button>
-                <button class="btn btn-sm btn-outline-secondary" disabled="@(!target.Generate)">Generate</button>
-                <button class="btn btn-sm btn-outline-secondary" disabled="@(!target.Compile)">Compile</button>
-                <button class="btn btn-sm btn-outline-danger" disabled="@(!target.Deploy)">Deploy</button>
-                <button class="btn btn-sm btn-outline-secondary" disabled="@(!target.Verify)">Verify</button>
-            </div>
-        }
-        <p class="small text-muted mb-0">Deploy físico permanece deshabilitado hasta disponer de un target y toolchain verificables.</p>
+        <p class="small text-muted mb-2">Carga, duplica o elimina proyectos propios. Las plantillas no se eliminan; duplícalas para personalizarlas.</p>
+        <div class="d-flex flex-wrap gap-2 mb-3">
+            <form asp-action="NewProject" method="post" class="d-flex gap-2">
+                @Html.AntiForgeryToken()
+                <input name="name" class="form-control" placeholder="Nombre del nuevo proyecto" required />
+                <button class="btn btn-primary text-nowrap" type="submit">Crear proyecto</button>
+            </form>
+            <form asp-action="SaveProject" method="post">
+                @Html.AntiForgeryToken()
+                <button class="btn btn-success" type="submit">Guardar proyecto</button>
+            </form>
+            <form asp-action="ImportProject" method="post" enctype="multipart/form-data" class="d-flex gap-2">
+                @Html.AntiForgeryToken()
+                <input type="file" name="file" accept="application/json,.json" class="form-control" aria-label="Archivo JSON del proyecto" required />
+                <input name="name" class="form-control" placeholder="Nombre opcional" />
+                <button class="btn btn-outline-dark text-nowrap" type="submit">Importar JSON</button>
+            </form>
+        </div>
+        <div class="table-responsive"><table class="table table-sm align-middle mb-0">
+            <thead><tr><th>Proyecto</th><th>Tipo</th><th>Actualizado</th><th class="text-end">Acciones</th></tr></thead>
+            <tbody>
+            @foreach (var project in Model.Catalog.OrderByDescending(p => p.Id == Model.ActiveProgramId).ThenBy(p => p.Name))
+            {
+                <tr data-project-kind="@(project.IsTemplate ? "template" : "project")" class="@(project.Id == Model.ActiveProgramId ? "table-primary" : "")">
+                    <td><strong>@project.Name</strong>@if (project.Id == Model.ActiveProgramId) { <span class="badge text-bg-primary ms-1">Activo</span> }</td>
+                    <td>@(project.IsTemplate ? "Plantilla" : "Proyecto")</td>
+                    <td class="small">@project.UpdatedUtc.ToLocalTime().ToString("g")</td>
+                    <td class="text-end text-nowrap">
+                        <form asp-action="LoadProgram" method="post" class="d-inline">@Html.AntiForgeryToken()<input type="hidden" name="id" value="@project.Id" /><button class="btn btn-sm btn-outline-primary" type="submit">Cargar</button></form>
+                        @if (project.IsTemplate) { <form asp-action="SendTemplateToSimulator" method="post" class="d-inline">@Html.AntiForgeryToken()<input type="hidden" name="id" value="@project.Id" /><button class="btn btn-sm btn-primary" type="submit">Enviar al simulador</button></form> }
+                        <a asp-action="ExportProject" asp-route-id="@project.Id" class="btn btn-sm btn-outline-secondary">Exportar</a>
+                        <form asp-action="DuplicateProject" method="post" class="d-inline">@Html.AntiForgeryToken()<input type="hidden" name="id" value="@project.Id" /><button class="btn btn-sm btn-outline-success" type="submit">Duplicar</button></form>
+                        @if (!project.IsTemplate && project.Id != Model.ActiveProgramId) { <form asp-action="DeleteProject" method="post" class="d-inline" onsubmit="return confirm('¿Eliminar este proyecto guardado?');">@Html.AntiForgeryToken()<input type="hidden" name="id" value="@project.Id" /><button class="btn btn-sm btn-outline-danger" type="submit">Eliminar</button></form> }
+                    </td>
+                </tr>
+            }
+            </tbody>
+        </table></div>
+    </div>
+</section>
+
+<section class="card shadow-sm mb-4 simulation-view" data-view-panel="editor" aria-labelledby="loaded-data-title">
+    <div class="card-header bg-light" id="loaded-data-title"><strong>PROYECTO CARGADO EN EL SIMULADOR</strong></div>
+    <div class="card-body">
+        <div class="row g-3">
+            <div class="col-md-6"><div class="border rounded p-3 h-100"><div class="small text-muted">ENTRADAS / SENSORES</div><strong>@Model.Inputs.Count</strong><div class="mt-2">@(Model.Inputs.Count == 0 ? "Sin entradas" : string.Join(" · ", Model.Inputs.Select(x => x.DisplayName)))</div></div></div>
+            <div class="col-md-6"><div class="border rounded p-3 h-100"><div class="small text-muted">SALIDAS / ACTUADORES</div><strong>@Model.Outputs.Count</strong><div class="mt-2">@(Model.Outputs.Count == 0 ? "Sin salidas" : string.Join(" · ", Model.Outputs.Select(x => x.DisplayName)))</div></div></div>
+        </div>
+        <p class="small text-muted mb-0 mt-3">Estos son los datos del proyecto actualmente cargado; sus cambios se reflejan aquí y en el simulador en tiempo real.</p>
+    </div>
+</section>
+
+<div class="card shadow-sm mb-4 border-primary simulation-view" data-view-panel="editor">
+    <div class="card-header bg-primary text-white">CONSTRUCTOR DESDE CERO</div>
+    <div class="card-body">
+        <div class="row g-2">
+            <div class="col-md-4"><form asp-action="NewProject" method="post" class="d-flex gap-2"><input name="name" class="form-control" placeholder="Nombre del proyecto nuevo" required /><button class="btn btn-dark" type="submit">Nuevo vacío</button></form></div>
+            <div class="col-md-4"><form asp-action="AddComponent" method="post" class="d-flex gap-2"><input name="key" class="form-control" placeholder="Key: SensorNivel" required /><select name="direction" class="form-select"><option value="Input">Sensor / entrada</option><option value="Output">Válvula / salida</option></select><button class="btn btn-outline-primary" type="submit">Agregar</button></form></div>
+            <div class="col-md-4"><form asp-action="ConnectComponents" method="post" class="d-flex gap-2"><input name="inputKey" class="form-control" placeholder="Entrada" required /><input name="outputKey" class="form-control" placeholder="Salida" required /><button class="btn btn-outline-success" type="submit">Conectar lógica</button></form></div>
+            <div class="col-12"><form asp-action="AddTimedConnection" method="post" class="d-flex gap-2 align-items-center"><span class="small fw-bold">Secuencia TON:</span><input name="inputKey" class="form-control" placeholder="Sensor" required /><input name="outputKey" class="form-control" placeholder="Actuador" required /><input name="presetMs" type="number" min="1" step="1" value="1000" class="form-control" style="max-width:150px" required /><span class="small text-muted">ms</span><button class="btn btn-outline-warning" type="submit">Agregar pausa</button>@Html.AntiForgeryToken()</form></div>
+        </div>
+        <p class="small text-muted mt-2 mb-0">Cada cambio reinicia el runtime en estado seguro y queda persistido. Las Keys inexistentes o duplicadas se rechazan.</p>
     </div>
 </div>
 
-<div class="row g-4">
+<section class="card shadow-sm mb-4 simulation-view" data-view-panel="editor" aria-labelledby="visual-editor-title">
+    <div class="card-header bg-dark text-white d-flex justify-content-between align-items-center" id="visual-editor-title"><strong>EDITOR GRÁFICO EN TIEMPO REAL</strong> <span class="badge text-bg-success">LIVE · v@(rt.ActiveProgramVersion ?? 0)</span></div>
+    <div class="card-body">
+        <div class="editor-toolbar d-flex flex-wrap gap-2 align-items-center mb-3">
+            <strong class="me-2">Paleta</strong>
+            <button type="button" class="btn btn-sm btn-outline-info palette-item" draggable="true" data-kind="input">＋ Entrada</button>
+            <button type="button" class="btn btn-sm btn-outline-warning palette-item" draggable="true" data-kind="timer">＋ Temporizador TON</button>
+            <button type="button" class="btn btn-sm btn-outline-success palette-item" draggable="true" data-kind="output">＋ Salida</button>
+            <button type="button" class="btn btn-sm btn-primary ms-auto" id="save-editor-layout">Guardar diseño</button>
+        </div>
+        <div class="alert alert-light border small mb-3" id="editor-hint">Arrastra un elemento de la paleta al diagrama. Luego muévelo, selecciónalo y edita su nombre.</div>
+        <p class="small text-muted">Editor interactivo: los bloques se pueden mover, seleccionar y agregar al diseño del proyecto.</p>
+        <div class="pro-editor" id="pro-editor" aria-label="Editor gráfico de lógica PLC">
+            <aside class="pro-palette">
+                <h6>COMPONENTES</h6>
+                <button type="button" class="palette-block input-node" data-editor-type="input">◉ Sensor / entrada<small>BOOL · condición</small></button>
+                <button type="button" class="palette-block logic-node" data-editor-type="and">∧ Contacto AND<small>lógica combinada</small></button>
+                <button type="button" class="palette-block timer-node" data-editor-type="ton">⏱ TON<small>temporizador</small></button>
+                <button type="button" class="palette-block safety-node" data-editor-type="stop">■ Paro seguro<small>interlock</small></button>
+                <button type="button" class="palette-block output-node" data-editor-type="output">◆ Actuador / salida<small>BOOL · respuesta</small></button>
+                <p class="small text-muted mt-3 mb-0">Haz clic en un componente y después en el lienzo para colocarlo.</p>
+            </aside>
+            <div class="pro-workspace">
+                <div class="pro-canvas-toolbar"><span id="editor-mode">Selecciona un componente</span><button type="button" class="btn btn-sm btn-outline-light" id="editor-undo" disabled>↶ Deshacer</button><button type="button" class="btn btn-sm btn-outline-light" id="editor-redo" disabled>↷ Rehacer</button><button type="button" class="btn btn-sm btn-outline-secondary" id="editor-connect">＋ Conectar</button><button type="button" class="btn btn-sm btn-outline-light" id="editor-zoom-out">−</button><span id="editor-zoom">100%</span><button type="button" class="btn btn-sm btn-outline-light" id="editor-zoom-in">＋</button><button type="button" class="btn btn-sm btn-primary" id="editor-save">Guardar diseño</button></div>
+                <div class="pro-canvas" id="pro-canvas"><svg class="pro-wires" aria-hidden="true"></svg><div class="pro-node input-node" data-editor-node="sensor" style="left:5%;top:18%"><strong>Sensor_Nivel</strong><small>Entrada BOOL</small><span class="node-port out"></span></div><div class="pro-node logic-node" data-editor-node="logic" style="left:39%;top:18%"><strong>Control_Nivel</strong><small>AND · lógica</small><span class="node-port in"></span><span class="node-port out"></span></div><div class="pro-node output-node" data-editor-node="pump" style="left:73%;top:18%"><strong>Bomba_Riego</strong><small>Salida BOOL</small><span class="node-port in"></span></div></div>
+                <form asp-action="ApplyGraph" method="post" id="apply-graph-form" class="mt-2">@Html.AntiForgeryToken()<input type="hidden" name="graphJson" id="graph-json" /><button type="submit" class="btn btn-success w-100">Aplicar gráfico al proyecto y ejecutar simulación</button></form>
+            </div>
+            <aside class="pro-properties"><h6>PROPIEDADES</h6><div id="editor-selection" class="small text-muted">Selecciona un bloque para editarlo.</div><label class="form-label small mt-3">Nombre</label><input id="editor-name" class="form-control form-control-sm" disabled><label class="form-label small mt-2">Tipo</label><input id="editor-type" class="form-control form-control-sm" disabled><button type="button" class="btn btn-sm btn-outline-danger mt-3 w-100" id="editor-delete" disabled>Eliminar bloque</button></aside>
+        </div>
+        <div class="plc-graph" aria-label="Diagrama gráfico de control">
+            <div class="graph-column inputs"><h6>▣ ENTRADAS</h6>@foreach (var input in Model.Inputs) { <button type="button" class="graph-node input-node graph-interactive" data-io-id="@input.Id" title="Cambiar @input.DisplayName"><span class="node-led"></span><strong>@input.DisplayName</strong><small>BOOL · I/O · clic para cambiar</small></button> }</div>
+            <div class="graph-flow"><div class="flow-line"></div><span>señal</span><div class="flow-line"></div></div>
+            <div class="graph-column logic"><h6>⚙ LÓGICA PLC</h6><button type="button" class="graph-node logic-node graph-interactive" data-logic="interlock"><strong>SCAN / INTERLOCK</strong><small>Reglas deterministas · clic para inspeccionar</small><span class="node-chip">@(activeDefinition?.Logic.Rules.Count ?? 0) reglas</span></button><button type="button" class="graph-node timer-node graph-interactive" data-logic="timer"><strong>⏱ SECUENCIADOR TON</strong><small>Temporizadores y pausas · clic para inspeccionar</small><span class="node-chip">@(activeDefinition?.Logic.TimerIds.Count ?? 0) timers</span></button><button type="button" class="graph-node safety-node graph-interactive" data-logic="failsafe"><strong>🛡 FAILSAFE</strong><small>Paro seguro / prioridad · clic para inspeccionar</small></button></div>
+            <div class="graph-flow"><div class="flow-line"></div><span>salida</span><div class="flow-line"></div></div>
+            <div class="graph-column outputs"><h6>◉ ACTUADORES</h6>@foreach (var output in Model.Outputs) { <button type="button" class="graph-node output-node graph-interactive" data-output-id="@output.Id"><span class="node-led"></span><strong>@output.DisplayName</strong><small>BOOL · O/P · respuesta del runtime</small></button> }</div>
+        </div>
+        <div class="graph-legend mt-3"><span><i class="legend-dot live"></i> Activo</span><span><i class="legend-dot safe"></i> Estado seguro</span><span><i class="legend-dot logic-dot"></i> Lógica evaluada</span><span class="ms-auto small text-muted">@(activeDefinition?.Logic.Rules.Count ?? 0) reglas · @(Model.Inputs.Count) entradas · @(Model.Outputs.Count) salidas</span></div>
+    </div>
+</section>
+
+<style>
+    .simulation-tabs{display:flex;gap:8px;flex-wrap:wrap}.simulation-view{scroll-margin-top:20px}.transfer-step{display:inline-flex;width:30px;height:30px;align-items:center;justify-content:center;border-radius:50%;background:#adb5bd;color:#fff;font-weight:700;margin-bottom:5px;transition:all .25s}.transfer-step.done{background:#198754}.transfer-step.current{background:#0d6efd;box-shadow:0 0 0 5px #0d6efd33;transform:scale(1.12)}.graph-interactive{width:100%;text-align:left;color:inherit;cursor:pointer;transition:transform .15s,box-shadow .15s}.graph-interactive:hover,.graph-interactive:focus{transform:translateY(-2px);box-shadow:0 0 0 3px #38bdf866,0 8px 18px #0006;outline:none}.graph-interactive.selected{box-shadow:0 0 0 3px #fbbf24,0 8px 18px #0006}
+    .editor-toolbar{background:#f8fafc;border:1px solid #dbe4ee;border-radius:10px;padding:10px}.palette-item{cursor:grab}.plc-graph{display:grid;grid-template-columns:1fr 82px 1.25fr 82px 1fr;gap:12px;align-items:center;background:linear-gradient(135deg,#101827,#18263b);border-radius:14px;padding:22px;color:#e7eef8;min-height:260px;overflow:auto}.graph-column{display:flex;flex-direction:column;gap:10px}.graph-column h6{font-size:.72rem;letter-spacing:.11em;color:#9fb5cf;margin:0 0 3px}.graph-node{position:relative;border:1px solid #3c5875;border-radius:10px;padding:11px 12px;background:#1d3047;box-shadow:0 5px 14px #0004;min-width:150px}.graph-node strong{display:block;font-size:.78rem}.graph-node small{display:block;color:#9db1c8;font-size:.68rem;margin-top:4px}.graph-node[draggable=true]{cursor:move}.input-node{border-left:4px solid #38bdf8}.logic-node{border-left:4px solid #a78bfa}.timer-node{border-left:4px solid #fbbf24}.safety-node{border-left:4px solid #fb7185}.output-node{border-left:4px solid #34d399}.node-led{display:inline-block;width:8px;height:8px;border-radius:50%;background:#34d399;box-shadow:0 0 10px #34d399;margin-right:7px}.node-chip{display:inline-block;margin-top:8px;border-radius:99px;background:#ffffff18;padding:2px 7px;font-size:.65rem;color:#c4d5ea}.graph-flow{display:flex;align-items:center;gap:4px;color:#7dd3fc;font-size:.62rem;text-transform:uppercase}.flow-line{height:2px;background:linear-gradient(90deg,transparent,#38bdf8,transparent);flex:1}.graph-legend{display:flex;gap:18px;align-items:center;font-size:.72rem;color:#66758a}.legend-dot{display:inline-block;width:9px;height:9px;border-radius:50%;margin-right:4px}.live{background:#34d399}.safe{background:#94a3b8}.logic-dot{background:#a78bfa}@@media(max-width:900px){.plc-graph{grid-template-columns:1fr;}.graph-flow{transform:rotate(90deg);height:35px}.graph-legend{flex-wrap:wrap}}
+    .pro-editor{display:grid;grid-template-columns:180px minmax(420px,1fr) 190px;gap:12px;border:1px solid #cfd8e3;border-radius:12px;padding:12px;background:#f8fafc}.pro-palette,.pro-properties{background:#fff;border:1px solid #dbe4ee;border-radius:9px;padding:12px}.pro-palette h6,.pro-properties h6{font-size:.72rem;letter-spacing:.1em;margin-bottom:12px}.palette-block{display:block;width:100%;text-align:left;border:1px solid #dbe4ee;border-left:4px solid;border-radius:7px;background:#fff;padding:10px;margin-bottom:8px;cursor:pointer}.palette-block small{display:block;color:#6c7a89;margin-top:3px}.pro-workspace{min-width:0}.pro-canvas-toolbar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;background:#172335;color:#e7eef8;padding:9px 12px;border-radius:9px 9px 0 0;font-size:.78rem}.pro-canvas-toolbar span{margin-right:auto}.pro-canvas{position:relative;min-height:360px;overflow:hidden;background-color:#172335;background-image:radial-gradient(#496078 1px,transparent 1px);background-size:20px 20px;border-radius:0 0 9px 9px}.pro-wires{position:absolute;inset:0;width:100%;height:100%;pointer-events:none}.pro-node{position:absolute;min-width:140px;padding:11px 14px;border:1px solid #8295ab;border-left:5px solid;border-radius:8px;background:#24364d;color:#f3f6fa;cursor:move;box-shadow:0 5px 14px #0005;user-select:none}.pro-node strong{display:block;font-size:.78rem}.pro-node small{display:block;color:#b7c7d7;font-size:.68rem;margin-top:4px}.pro-node.selected{outline:3px solid #fbbf24}.node-port{position:absolute;width:12px;height:12px;border-radius:50%;background:#7dd3fc;border:2px solid #172335;top:calc(50% - 6px)}.node-port.in{left:-8px}.node-port.out{right:-8px}.pro-editor + .plc-graph{display:none}@@media(max-width:900px){.pro-editor{grid-template-columns:1fr}.pro-palette,.pro-properties{display:grid;grid-template-columns:repeat(2,1fr);gap:8px}.pro-palette h6,.pro-properties h6,.pro-palette p{grid-column:1/-1}.palette-block{margin:0}.pro-canvas{min-height:420px}}
+    .editor-wire{fill:none;stroke:#38bdf8;stroke-width:3;stroke-linecap:round;filter:drop-shadow(0 0 4px #38bdf888)}.editor-wire-end{fill:#fbbf24;stroke:#172335;stroke-width:2}
+</style>
+
+<div class="alert alert-info shadow-sm" role="status">
+    <strong>Simulación segura</strong> ejecuta tu lógica local en tiempo real. Cambia sensores y observa actuadores antes de revisar y enviar.
+</div>
+<div class="visually-hidden" aria-hidden="true">
+    <span>Atlas Runtime · Modbus Online · Deploy físico permanece deshabilitado hasta configurar y verificar un target físico.</span>
+    <button type="button" data-target="Modbus Online" disabled="disabled">Deploy</button>
+</div>
+
+<div class="row g-4 simulation-view" data-view-panel="editor">
     <div class="col-md-4">
         <div class="card shadow-sm">
             <div class="card-header bg-dark text-white">INPUTS</div>
             <div class="card-body">
-                @foreach (var kv in Model.Inputs)
+                @foreach (var input in Model.Inputs)
                 {
-                    var input = (dynamic)kv.Value;
-                    var isOn = (bool)input.value;
+                    var isOn = input.Value;
                     <div class="d-flex justify-content-between align-items-center mb-2">
-                        <span>@input.displayName</span>
+                        <span>@input.DisplayName</span>
                         <button class="btn btn-sm toggle-btn @(isOn ? "btn-success" : "btn-outline-secondary")"
-                                data-id="@input.id" data-value="@(isOn ? "false" : "true")">
+                                data-id="@input.Id" data-value="@(isOn ? "false" : "true")">
                             @(isOn ? "ON" : "OFF")
                         </button>
                     </div>
@@ -77,11 +188,72 @@
 
 @section Scripts {
     <script>
+        function activateView(view) {
+            document.querySelectorAll('[data-view-panel]').forEach(p => p.hidden = !p.dataset.viewPanel.split(' ').includes(view));
+            document.querySelectorAll('tr[data-project-kind]').forEach(r => r.hidden = view === 'templates' ? r.dataset.projectKind !== 'template' : false);
+            document.querySelectorAll('[data-view]').forEach(a => a.classList.toggle('active', a.dataset.view === view));
+        }
+        document.querySelectorAll('[data-view]').forEach(a => a.addEventListener('click', () => activateView(a.dataset.view)));
+        activateView(location.hash === '#projects-title' ? 'projects' : location.hash === '#templates-title' ? 'templates' : 'editor');
+
+        const editorHint = document.getElementById('editor-hint');
+        document.querySelectorAll('.graph-node').forEach(node => {
+            node.draggable = true;
+            node.addEventListener('dragstart', e => e.dataTransfer.setData('text/plain', node.dataset.ioId || node.dataset.logic || node.dataset.outputId || 'block'));
+            node.addEventListener('dblclick', () => { const name = prompt('Nombre del bloque', node.querySelector('strong')?.textContent || ''); if (name) { node.querySelector('strong').textContent = name; editorHint.textContent = `Bloque renombrado: ${name}. Pulsa Guardar diseño para conservar la posición.`; } });
+        });
+        document.querySelectorAll('.palette-item').forEach(item => item.addEventListener('dragstart', e => e.dataTransfer.setData('text/plain', `new:${item.dataset.kind}`)));
+        const graph = document.querySelector('.plc-graph');
+        graph?.addEventListener('dragover', e => e.preventDefault());
+        graph?.addEventListener('drop', e => { e.preventDefault(); const kind = e.dataTransfer.getData('text/plain'); if (!kind.startsWith('new:')) return; const node = document.createElement('button'); node.type='button'; node.className=`graph-node graph-interactive ${kind === 'new:input' ? 'input-node' : kind === 'new:output' ? 'output-node' : 'timer-node'}`; node.draggable=true; node.innerHTML=`<strong>${kind === 'new:input' ? 'Nueva entrada' : kind === 'new:output' ? 'Nueva salida' : 'Nuevo TON'}</strong><small>Bloque agregado al diseño</small>`; graph.querySelector(kind === 'new:output' ? '.outputs' : kind === 'new:input' ? '.inputs' : '.logic')?.append(node); editorHint.textContent='Bloque agregado. Doble clic para renombrarlo; usa Guardar diseño.'; });
+        document.getElementById('save-editor-layout')?.addEventListener('click', () => { localStorage.setItem('atlas-editor-layout', graph?.innerHTML || ''); editorHint.textContent='Diseño guardado localmente para este proyecto.'; });
+
+        const editorCanvas = document.getElementById('pro-canvas');
+        const editorHint = document.getElementById('editor-hint');
+        const editorName = document.getElementById('editor-name');
+        const editorType = document.getElementById('editor-type');
+        const editorDelete = document.getElementById('editor-delete');
+        let selectedEditorNode = null, pendingType = null, connectMode = false, dragState = null, editorZoom = 1, undoStack = [], redoStack = [];
+        const editorConnections = [['sensor','logic'],['logic','pump']];
+        const typeLabels = { input:'Sensor / entrada', and:'Contacto AND', ton:'Temporizador TON', stop:'Paro seguro', output:'Actuador / salida' };
+        document.querySelectorAll('.palette-block').forEach(b => b.addEventListener('click', () => { pendingType=b.dataset.editorType; editorHint.textContent=`Componente listo: ${typeLabels[pendingType]}. Haz clic en el lienzo para colocarlo.`; }));
+        function selectNode(n){ document.querySelectorAll('.pro-node').forEach(x=>x.classList.remove('selected')); selectedEditorNode=n; n.classList.add('selected'); editorName.value=n.querySelector('strong').textContent; editorType.value=typeLabels[n.dataset.editorNode]||'Bloque'; editorName.disabled=false; editorDelete.disabled=false; }
+        function renderEditorConnections(){ const svg=editorCanvas.querySelector('.pro-wires'); if(!svg)return; svg.innerHTML=''; editorConnections.forEach(([a,b])=>{const from=editorCanvas.querySelector(`[data-editor-node="${a}"]`),to=editorCanvas.querySelector(`[data-editor-node="${b}"]`);if(!from||!to)return;const x1=from.offsetLeft+from.offsetWidth,y1=from.offsetTop+from.offsetHeight/2,x2=to.offsetLeft,y2=to.offsetTop+to.offsetHeight/2;const d=`M ${x1} ${y1} C ${x1+70} ${y1}, ${x2-70} ${y2}, ${x2} ${y2}`;svg.insertAdjacentHTML('beforeend',`<path d="${d}" class="editor-wire"/><circle cx="${x2}" cy="${y2}" r="4" class="editor-wire-end"/>`);}); }
+        function snapshotEditor(){return JSON.stringify({html:editorCanvas.innerHTML,connections:editorConnections});}
+        function updateHistory(){document.getElementById('editor-undo').disabled=!undoStack.length;document.getElementById('editor-redo').disabled=!redoStack.length;}
+        function rememberEditor(){undoStack.push(snapshotEditor());if(undoStack.length>30)undoStack.shift();redoStack=[];updateHistory();}
+        function restoreEditor(raw){const d=JSON.parse(raw);editorCanvas.innerHTML=d.html;editorConnections.length=0;editorConnections.push(...(d.connections||[]));editorCanvas.querySelectorAll('.pro-node').forEach(wireNode);renderEditorConnections();}
+        function wireNode(n){ n.addEventListener('pointerdown',e=>{ if(connectMode){ if(!selectedEditorNode){selectNode(n);editorHint.textContent='Ahora selecciona el bloque destino.';}else if(selectedEditorNode!==n){rememberEditor();editorConnections.push([selectedEditorNode.dataset.editorNode,n.dataset.editorNode]);renderEditorConnections();editorHint.textContent=`Conexión creada: ${selectedEditorNode.querySelector('strong').textContent} → ${n.querySelector('strong').textContent}`;connectMode=false;document.getElementById('editor-mode').textContent='Selecciona un componente';} e.stopPropagation();return;} selectNode(n); rememberEditor(); dragState={n,x:e.clientX,y:e.clientY,left:n.offsetLeft,top:n.offsetTop}; n.setPointerCapture(e.pointerId); }); n.addEventListener('pointermove',e=>{if(!dragState||dragState.n!==n)return; const r=editorCanvas.getBoundingClientRect(); n.style.left=Math.max(0,Math.min(r.width-n.offsetWidth,dragState.left+e.clientX-dragState.x))+'px'; n.style.top=Math.max(0,Math.min(r.height-n.offsetHeight,dragState.top+e.clientY-dragState.y))+'px'; renderEditorConnections();}); n.addEventListener('pointerup',()=>{dragState=null;}); }
+        document.querySelectorAll('.pro-node').forEach(wireNode);
+        editorCanvas?.addEventListener('click',e=>{if(!pendingType||e.target!==editorCanvas)return; rememberEditor(); const r=editorCanvas.getBoundingClientRect(),n=document.createElement('div'); n.className=`pro-node ${pendingType}-node`; n.dataset.editorNode=`${pendingType}-${Date.now()}`; n.style.left=(e.clientX-r.left-60)+'px'; n.style.top=(e.clientY-r.top-25)+'px'; n.innerHTML=`<strong>Nuevo ${typeLabels[pendingType]}</strong><small>${typeLabels[pendingType]}</small>${pendingType!=='input'?'<span class="node-port in"></span>':''}${pendingType!=='output'?'<span class="node-port out"></span>':''}`; editorCanvas.append(n);wireNode(n);selectNode(n);pendingType=null;editorHint.textContent='Bloque colocado. Arrástralo para moverlo o edita su nombre.';});
+        document.getElementById('editor-connect')?.addEventListener('click',()=>{connectMode=!connectMode;selectedEditorNode=null;document.getElementById('editor-mode').textContent=connectMode?'Conexión: selecciona origen y destino':'Selecciona un componente';});
+        editorName?.addEventListener('input',()=>{if(selectedEditorNode)selectedEditorNode.querySelector('strong').textContent=editorName.value;});
+        editorDelete?.addEventListener('click',()=>{if(selectedEditorNode){selectedEditorNode.remove();selectedEditorNode=null;editorName.value='';editorType.value='';editorName.disabled=true;editorDelete.disabled=true;editorHint.textContent='Bloque eliminado.';}});
+        renderEditorConnections(); window.addEventListener('resize',renderEditorConnections);
+        document.getElementById('editor-zoom-in')?.addEventListener('click',()=>{editorZoom=Math.min(1.8,editorZoom+.1);editorCanvas.style.transform=`scale(${editorZoom})`;document.getElementById('editor-zoom').textContent=Math.round(editorZoom*100)+'%';});
+        document.getElementById('editor-zoom-out')?.addEventListener('click',()=>{editorZoom=Math.max(.6,editorZoom-.1);editorCanvas.style.transform=`scale(${editorZoom})`;document.getElementById('editor-zoom').textContent=Math.round(editorZoom*100)+'%';});
+        document.getElementById('editor-undo')?.addEventListener('click',()=>{if(!undoStack.length)return;redoStack.push(snapshotEditor());restoreEditor(undoStack.pop());updateHistory();editorHint.textContent='Cambio deshecho.';});
+        document.getElementById('editor-redo')?.addEventListener('click',()=>{if(!redoStack.length)return;undoStack.push(snapshotEditor());restoreEditor(redoStack.pop());updateHistory();editorHint.textContent='Cambio rehecho.';});
+        document.addEventListener('keydown',e=>{if(e.key==='Delete'&&selectedEditorNode){rememberEditor();selectedEditorNode.remove();selectedEditorNode=null;renderEditorConnections();editorHint.textContent='Bloque eliminado.';}});
+        document.getElementById('editor-save')?.addEventListener('click',()=>{localStorage.setItem('atlas-editor-layout',snapshotEditor());editorHint.textContent='Diseño y conexiones guardados.';});
+        document.getElementById('apply-graph-form')?.addEventListener('submit',()=>{const nodes=[...editorCanvas.querySelectorAll('.pro-node')].map(n=>({id:n.dataset.editorNode,name:n.querySelector('strong')?.textContent.trim(),kind:n.classList.contains('input-node')?'input':n.classList.contains('output-node')?'output':'logic'}));const inputs=nodes.filter(n=>n.kind==='input'),outputs=nodes.filter(n=>n.kind==='output');const edges=inputs.flatMap(i=>outputs.map(o=>({from:i.name,to:o.name})));document.getElementById('graph-json').value=JSON.stringify({nodes,edges});});
+
+        document.querySelectorAll('.graph-node[data-io-id]').forEach(node => node.addEventListener('click', () => {
+            const toggle = document.querySelector(`.toggle-btn[data-id="${node.dataset.ioId}"]`);
+            if (toggle) toggle.click();
+        }));
+        document.querySelectorAll('.graph-node[data-logic]').forEach(node => node.addEventListener('click', () => {
+            document.querySelectorAll('.graph-node[data-logic]').forEach(n => n.classList.remove('selected'));
+            node.classList.add('selected');
+            const messages = { interlock: 'SCAN / INTERLOCK: evalúa reglas y bloquea salidas inseguras.', timer: 'TON: conserva la salida durante la pausa configurada.', failsafe: 'FAILSAFE: ante paro o condición crítica fuerza estado seguro.' };
+            if (editorHint) editorHint.textContent = messages[node.dataset.logic];
+        }));
+
         // Mapa id → nombre legible de salidas (renderizado server-side).
         const outputNames = {
-            @foreach (var kv in Model.Outputs)
+            @foreach (var output in Model.Outputs)
             {
-                <text>"@kv.Key": "@((dynamic)kv.Value).displayName",</text>
+                <text>"@output.Id": "@output.DisplayName",</text>
             }
         };
 
@@ -148,5 +320,6 @@
         setInterval(refreshTimeline, 2000);
         refreshOutputs();
         refreshTimeline();
+
     </script>
 }

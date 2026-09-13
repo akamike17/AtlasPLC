@@ -24,6 +24,9 @@ public sealed class PlcProgramDefinition
     /// <summary>Descripción corta para la biblioteca.</summary>
     public string Description { get; set; } = string.Empty;
 
+    /// <summary>Indica que el programa pertenece a la biblioteca inicial y no es un proyecto del usuario.</summary>
+    public bool IsTemplate { get; set; }
+
     /// <summary>Variables/tags del programa (inputs + outputs).</summary>
     public List<VariableDefinition> Variables { get; set; } = new();
 

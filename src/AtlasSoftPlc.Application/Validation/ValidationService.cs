@@ -50,11 +50,11 @@ public sealed class ReferencesValidationRule : IValidationRule
         {
             if (string.IsNullOrWhiteSpace(v.Key))
             {
-                yield return new ValidationIssue { Severity = ValidationSeverity.Error, Code = Code, Message = "Variable sin Key válida", VariableId = v.Id };
+                yield return new ValidationIssue { Severity = ValidationSeverity.Error, Code = Code, Category = ValidationCategory.Schema, Message = "Variable sin Key válida", Why = "La Key identifica la variable en reglas, mapas y conectores.", Evidence = $"VariableId={v.Id}", Hint = "Asigna una Key única, corta y estable; por ejemplo SensorNivelAlto.", VariableId = v.Id };
                 continue;
             }
             if (!seenKeys.Add(v.Key))
-                yield return new ValidationIssue { Severity = ValidationSeverity.Error, Code = Code, Message = $"Key duplicada: {v.Key}", VariableId = v.Id };
+                yield return new ValidationIssue { Severity = ValidationSeverity.Error, Code = Code, Category = ValidationCategory.Schema, Message = $"Key duplicada: {v.Key}", Why = "Dos variables con la misma Key hacen ambiguo el mapeo hacia el PLC.", Evidence = $"Key={v.Key}; VariableId={v.Id}", Hint = "Renombra una de las variables y vuelve a validar antes de guardar.", VariableId = v.Id };
         }
 
         // Referencias en reglas
@@ -63,14 +63,14 @@ public sealed class ReferencesValidationRule : IValidationRule
             foreach (var (expr, id) in CollectVariableRefs(rule.Condition))
             {
                 if (!variables.ContainsKey(id))
-                    yield return new ValidationIssue { Severity = ValidationSeverity.Error, Code = Code, Message = $"Regla '{rule.Name}' referencia variable inexistente", RuleId = rule.Id, VariableId = id };
+                    yield return new ValidationIssue { Severity = ValidationSeverity.Error, Code = Code, Category = ValidationCategory.Reference, Message = $"Regla '{rule.Name}' referencia variable inexistente", Why = "La regla no puede ejecutarse de forma determinista si su entrada fue eliminada.", Evidence = $"RuleId={rule.Id}; VariableId={id}", Hint = "Selecciona una variable existente o elimina la referencia rota; después ejecuta Validar construcción.", RuleId = rule.Id, VariableId = id };
             }
             foreach (var action in rule.Actions.Concat(rule.ElseActions))
             {
                 if (action is SetOutputAction o && !variables.ContainsKey(o.VariableId))
-                    yield return new ValidationIssue { Severity = ValidationSeverity.Error, Code = Code, Message = $"Regla '{rule.Name}' escribe a variable inexistente", RuleId = rule.Id, VariableId = o.VariableId };
+                    yield return new ValidationIssue { Severity = ValidationSeverity.Error, Code = Code, Category = ValidationCategory.Reference, Message = $"Regla '{rule.Name}' escribe a variable inexistente", Why = "Una salida inexistente no puede garantizar el estado del actuador.", Evidence = $"RuleId={rule.Id}; OutputId={o.VariableId}", Hint = "Crea la salida o cambia la acción a una salida existente antes de simular o desplegar.", RuleId = rule.Id, VariableId = o.VariableId };
                 if (action is SetMemoryAction m && !variables.ContainsKey(m.VariableId))
-                    yield return new ValidationIssue { Severity = ValidationSeverity.Error, Code = Code, Message = $"Regla '{rule.Name}' escribe a memoria inexistente", RuleId = rule.Id, VariableId = m.VariableId };
+                    yield return new ValidationIssue { Severity = ValidationSeverity.Error, Code = Code, Category = ValidationCategory.Reference, Message = $"Regla '{rule.Name}' escribe a memoria inexistente", Why = "El estado interno no se puede almacenar porque su variable ya no existe.", Evidence = $"RuleId={rule.Id}; MemoryId={m.VariableId}", Hint = "Crea la variable de memoria o elimina la acción huérfana antes de continuar.", RuleId = rule.Id, VariableId = m.VariableId };
             }
         }
     }
@@ -126,7 +126,11 @@ public sealed class FailsafeValidationRule : IValidationRule
                 {
                     Severity = ValidationSeverity.Warning,
                     Code = Code,
+                    Category = ValidationCategory.Safety,
                     Message = $"La salida '{output.DisplayName}' está marcada SafetyCritical. Esta lógica no sustituye una función de seguridad física/certificada.",
+                    Why = "Una salida SafetyCritical necesita revisión independiente y un circuito físico certificado.",
+                    Evidence = $"OutputId={output.Id}; SafetyCritical=true",
+                    Hint = "Confirma el safe-state, agrega el interlock físico requerido y solicita revisión de seguridad antes de desplegar.",
                     VariableId = output.Id
                 };
             }

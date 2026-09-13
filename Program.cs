@@ -7,10 +7,14 @@ using AtlasSoftPlc.Infrastructure.Persistence;
 using AtlasSoftPlc.Runtime.Hosting;
 using AtlasSoftPlc.Web.Hubs;
 using AtlasSoftPlc.Web.Auth;
+using AtlasSoftPlc.Targets;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.AspNetCore.DataProtection.KeyManagement;
+using Microsoft.AspNetCore.DataProtection.Repositories;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
+using Microsoft.Extensions.Logging.Abstractions;
 using Serilog;
 
 // ── Logging estructurado (Serilog): consola + archivo rotativo ──
@@ -35,10 +39,23 @@ Log.Logger = new LoggerConfiguration()
 var builder = WebApplication.CreateBuilder(args);
 builder.Host.UseSerilog();
 
+// En desarrollo el host administrado puede no tener acceso al directorio global
+// de claves de ASP.NET. Usar un directorio temporal propio evita que antiforgery
+// y cookies fallen al renderizar el login, sin desactivar Data Protection.
+if (builder.Environment.IsDevelopment())
+{
+    var dataProtectionDir = Path.Combine(Path.GetTempPath(), "AtlasSoftPlc", "DataProtection-Keys");
+    Directory.CreateDirectory(dataProtectionDir);
+    builder.Services.AddDataProtection();
+    builder.Services.PostConfigure<KeyManagementOptions>(options =>
+        options.XmlRepository = new FileSystemXmlRepository(new DirectoryInfo(dataProtectionDir), NullLoggerFactory.Instance));
+}
+
 // ---- MVC + antiforgery + SignalR ----
 builder.Services.AddControllersWithViews();
 builder.Services.AddSignalR();
 builder.Services.AddMemoryCache();
+builder.Services.AddSingleton<ITargetRegistry, TargetRegistry>();
 
 // Antiforgery para APIs JSON (sección de seguridad): token esperado en el header.
 builder.Services.AddAntiforgery(options =>
@@ -181,6 +198,9 @@ var app = builder.Build();
 
 // Sembrar usuarios iniciales (solo si la tabla está vacía).
 app.Services.GetRequiredService<AtlasSoftPlc.Web.Auth.UserSeeder>().SeedIfEmpty();
+// Sincronizar la biblioteca inicial antes de servir la UI. Es idempotente:
+// conserva programas existentes y agrega únicamente los proyectos faltantes.
+app.Services.GetRequiredService<AtlasSoftPlc.Web.Services.SimulationService>().EnsureLibrary();
 
 if (!app.Environment.IsDevelopment())
 {

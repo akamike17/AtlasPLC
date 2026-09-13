@@ -5,8 +5,9 @@ namespace AtlasSoftPlc.Web.Auth;
 
 /// <summary>
 /// Siembra cuentas de usuario iniciales desde configuración.
-/// Si la tabla Users está vacía, crea los usuarios declarados en "Auth:Seed"
-/// (formato: usuario:rol) usando la contraseña de "Auth:SeedPassword".
+/// Crea los usuarios declarados en "Auth:Seed" (formato: usuario:rol) que aún
+/// no existan, usando la contraseña de "Auth:SeedPassword". No modifica las
+/// cuentas existentes.
 /// En ningún caso persiste credenciales en el código fuente.
 /// </summary>
 public sealed class UserSeeder
@@ -26,9 +27,6 @@ public sealed class UserSeeder
 
     public void SeedIfEmpty()
     {
-        if (_store.All().Any())
-            return;
-
         var seed = _config.GetSection("Auth:Seed").Get<Dictionary<string, string>>();
         var password = _config["Auth:SeedPassword"];
 
@@ -44,8 +42,15 @@ public sealed class UserSeeder
             return;
         }
 
+        var existingUsers = _store.All()
+            .Select(user => user.Username)
+            .ToHashSet(StringComparer.OrdinalIgnoreCase);
+
         foreach (var (username, role) in seed)
         {
+            if (existingUsers.Contains(username))
+                continue;
+
             _store.Upsert(new UserAccount(username, _hasher.Hash(password), role, username));
             _logger.LogInformation("Usuario sembrado: {User} (rol {Role})", username, role);
         }

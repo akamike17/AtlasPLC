@@ -1,11 +1,12 @@
 using System.Diagnostics;
+using System.Text.Json;
+using System.Globalization;
 using AtlasSoftPlc.Application.Services;
 using AtlasSoftPlc.Domain.Projects;
 using AtlasSoftPlc.Domain.Runtime;
 using AtlasSoftPlc.Runtime.Hosting;
 using AtlasSoftPlc.Web.Models;
 using AtlasSoftPlc.Web.Services;
-using AtlasSoftPlc.Protocols.Modbus.Targets;
 using AtlasSoftPlc.Targets;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
@@ -18,13 +19,17 @@ public class HomeController : Controller
     private readonly PlcRuntimeService _runtime;
     private readonly SimulationService _sim;
     private readonly ModbusIoService _modbus;
+    private readonly ITargetRegistry _targets;
+    private readonly ProgramVersionService _versions;
 
-    public HomeController(RuntimeStateStore store, PlcRuntimeService runtime, SimulationService sim, ModbusIoService modbus)
+    public HomeController(RuntimeStateStore store, PlcRuntimeService runtime, SimulationService sim, ModbusIoService modbus, ITargetRegistry targets, ProgramVersionService versions)
     {
         _store = store;
         _runtime = runtime;
         _sim = sim;
         _modbus = modbus;
+        _targets = targets;
+        _versions = versions;
     }
 
     private void EnsureDemo()
@@ -80,26 +85,208 @@ public class HomeController : Controller
         if (!ok)
             return NotFound();
 
-        return RedirectToAction(nameof(Programs));
+        return RedirectToAction(nameof(Simulation));
     }
 
-    private DashboardViewModel BuildModel() => new()
+    [HttpPost]
+    [ValidateAntiForgeryToken]
+    public IActionResult SendTemplateToSimulator(Guid id)
     {
+        EnsureDemo();
+        if (!_sim.LoadProgram(id))
+            return NotFound();
+
+        TempData["BuilderMessage"] = "Plantilla cargada directamente en el simulador.";
+        return RedirectToAction(nameof(Simulation), new { view = "editor" });
+    }
+
+    [HttpPost]
+    [ValidateAntiForgeryToken]
+    public IActionResult DuplicateProject(Guid id, string? name)
+    {
+        EnsureDemo();
+        var copy = _sim.DuplicateProgram(id, name);
+        TempData["BuilderMessage"] = copy is null ? "No se pudo duplicar el proyecto." : $"Proyecto duplicado: '{copy.Name}'.";
+        return RedirectToAction(nameof(Simulation));
+    }
+
+    [HttpPost]
+    [ValidateAntiForgeryToken]
+    [Microsoft.AspNetCore.Authorization.Authorize(Roles = "Administrator")]
+    public IActionResult DeleteProject(Guid id)
+    {
+        EnsureDemo();
+        var deleted = _sim.DeleteProgram(id);
+        TempData["BuilderMessage"] = deleted ? "Proyecto eliminado." : "No se puede eliminar una plantilla ni el proyecto activo. Duplica o carga otro proyecto antes.";
+        return RedirectToAction(nameof(Simulation));
+    }
+
+    [HttpPost]
+    [ValidateAntiForgeryToken]
+    public IActionResult SaveProject()
+    {
+        EnsureDemo();
+        SaveVersion("Guardado manual del proyecto");
+        TempData["BuilderMessage"] = _sim.Active is null
+            ? "No hay un proyecto activo para guardar."
+            : $"Proyecto guardado: '{_sim.Active.Name}'.";
+        return RedirectToAction(nameof(Simulation));
+    }
+
+    [HttpGet]
+    public IActionResult ExportProject(Guid id)
+    {
+        EnsureDemo();
+        var project = _sim.Catalog.FirstOrDefault(p => p.Id == id);
+        if (project is null) return NotFound();
+        var json = JsonSerializer.Serialize(project, new JsonSerializerOptions { WriteIndented = true });
+        return File(System.Text.Encoding.UTF8.GetBytes(json), "application/json", $"atlas-{project.Name.Replace(' ', '-')}.json");
+    }
+
+    [HttpPost]
+    [ValidateAntiForgeryToken]
+    [Microsoft.AspNetCore.Authorization.Authorize(Roles = "Administrator")]
+    public IActionResult RestoreVersion(Guid versionId)
+    {
+        EnsureDemo();
+        var version = _versions.GetAsync(versionId).GetAwaiter().GetResult();
+        var restored = version is not null && _sim.RestoreProgramDefinition(version.DefinitionJson);
+        TempData["BuilderMessage"] = restored ? $"Versión {version!.VersionNumber} restaurada y cargada en modo seguro." : "No se pudo restaurar la versión seleccionada.";
+        return RedirectToAction(nameof(Simulation));
+    }
+
+    [HttpPost]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> ImportProject(IFormFile? file, string? name)
+    {
+        EnsureDemo();
+        if (file is null || file.Length == 0 || file.Length > 2_000_000)
+        {
+            TempData["BuilderMessage"] = "Selecciona un archivo JSON de proyecto válido (máximo 2 MB).";
+            return RedirectToAction(nameof(Simulation));
+        }
+        using var reader = new StreamReader(file.OpenReadStream());
+        var json = await reader.ReadToEndAsync();
+        TempData["BuilderMessage"] = _sim.ImportProgramDefinition(json, name ?? string.Empty)
+            ? "Proyecto importado, validado y cargado en el simulador en estado seguro."
+            : "Importación rechazada: el archivo no contiene una definición AtlasPLC válida.";
+        return RedirectToAction(nameof(Simulation));
+    }
+
+    [HttpPost]
+    [ValidateAntiForgeryToken]
+    public IActionResult NewProject(string name)
+    {
+        EnsureDemo();
+        _sim.CreateFromZero(name);
+        SaveVersion("Proyecto creado desde cero");
+        return RedirectToAction(nameof(Simulation));
+    }
+
+    [HttpPost]
+    [ValidateAntiForgeryToken]
+    public IActionResult ApplyGraph(string graphJson)
+    {
+        EnsureDemo();
+        if (_sim.Active is null || string.IsNullOrWhiteSpace(graphJson))
+        {
+            TempData["BuilderMessage"] = "Crea o carga un proyecto antes de aplicar el gráfico.";
+            return RedirectToAction(nameof(Simulation));
+        }
+        try
+        {
+            using var doc = JsonDocument.Parse(graphJson);
+            var nodes = doc.RootElement.GetProperty("nodes");
+            foreach (var node in nodes.EnumerateArray())
+            {
+                var kind = node.GetProperty("kind").GetString();
+                var name = node.GetProperty("name").GetString();
+                if (string.IsNullOrWhiteSpace(name) || kind is not ("input" or "output")) continue;
+                _sim.AddBooleanComponent(name, kind == "input" ? AtlasSoftPlc.Domain.Common.VariableDirection.Input : AtlasSoftPlc.Domain.Common.VariableDirection.Output);
+            }
+            foreach (var edge in doc.RootElement.GetProperty("edges").EnumerateArray())
+                _sim.ConnectInputToOutput(edge.GetProperty("from").GetString()!, edge.GetProperty("to").GetString()!);
+            SaveVersion("Diseño gráfico aplicado al proyecto");
+            TempData["BuilderMessage"] = "Diseño gráfico validado y aplicado al simulador en estado seguro.";
+        }
+        catch (JsonException) { TempData["BuilderMessage"] = "El diseño gráfico no es válido y no se aplicó."; }
+        return RedirectToAction(nameof(Simulation));
+    }
+
+    [HttpPost]
+    [ValidateAntiForgeryToken]
+    public IActionResult AddComponent(string key, string direction)
+    {
+        EnsureDemo();
+        var dir = Enum.TryParse<AtlasSoftPlc.Domain.Common.VariableDirection>(direction, true, out var parsed) ? parsed : AtlasSoftPlc.Domain.Common.VariableDirection.Input;
+        TempData["BuilderMessage"] = _sim.AddBooleanComponent(key, dir) ? $"Componente '{key}' agregado." : "No se pudo agregar: la Key está vacía o duplicada.";
+        if (TempData["BuilderMessage"] is string message && message.StartsWith("Componente", StringComparison.Ordinal)) SaveVersion("Componente agregado");
+        return RedirectToAction(nameof(Simulation));
+    }
+
+    [HttpPost]
+    [ValidateAntiForgeryToken]
+    public IActionResult RemoveComponent(Guid id)
+    {
+        EnsureDemo();
+        var removed = _sim.RemoveComponent(id);
+        TempData["BuilderMessage"] = removed ? "Componente eliminado y referencias invalidadas limpiadas." : "No se pudo eliminar el componente.";
+        if (removed) SaveVersion("Componente eliminado");
+        return RedirectToAction(nameof(Simulation));
+    }
+
+    [HttpPost]
+    [ValidateAntiForgeryToken]
+    public IActionResult ConnectComponents(string inputKey, string outputKey)
+    {
+        EnsureDemo();
+        TempData["BuilderMessage"] = _sim.ConnectInputToOutput(inputKey, outputKey) ? "Conexión creada y simulación reiniciada." : "Conexión inválida: revisa que exista una entrada y una salida con esas Keys.";
+        if (TempData["BuilderMessage"] is string message && message.StartsWith("Conexión creada", StringComparison.Ordinal)) SaveVersion("Conexión lógica agregada");
+        return RedirectToAction(nameof(Simulation));
+    }
+
+    [HttpPost]
+    [ValidateAntiForgeryToken]
+    public IActionResult AddTimedConnection(string inputKey, string outputKey, string presetMs)
+    {
+        EnsureDemo();
+        var parsed = double.TryParse(presetMs, NumberStyles.Float, CultureInfo.InvariantCulture, out var milliseconds)
+            || double.TryParse(presetMs, NumberStyles.Float, CultureInfo.CurrentCulture, out milliseconds);
+        TempData["BuilderMessage"] = parsed && _sim.AddTimedConnection(inputKey, outputKey, milliseconds)
+            ? $"Secuencia creada: {outputKey} se activará después de {milliseconds:0} ms."
+            : "No se pudo crear la secuencia: revisa las Keys y el tiempo mayor que cero.";
+        if (TempData["BuilderMessage"] is string message && message.StartsWith("Secuencia creada", StringComparison.Ordinal)) SaveVersion("Secuencia temporizada agregada");
+        return RedirectToAction(nameof(Simulation));
+    }
+
+    private void SaveVersion(string reason)
+    {
+        if (_sim.Active is null) return;
+        var json = JsonSerializer.Serialize(_sim.Active);
+        var history = _versions.GetByProgramAsync(_sim.Active.Id).GetAwaiter().GetResult();
+        var next = history.Count == 0 ? 1 : history.Max(v => v.VersionNumber) + 1;
+        _versions.CreateAsync(_sim.Active.Id, next, json, User.Identity?.Name ?? "local", reason).GetAwaiter().GetResult();
+    }
+
+    private DashboardViewModel BuildModel()
+    {
+        var descriptors = _targets.GetAll();
+        var statuses = descriptors.ToDictionary(t => t.Id, t => _targets.GetStatusAsync(t.Id).GetAwaiter().GetResult(), StringComparer.OrdinalIgnoreCase);
+        return new()
+        {
         Runtime = _store.Snapshot,
         Project = _sim.Project!,
-        Inputs = _sim.GetInputsUi(),
-        Outputs = _sim.GetOutputsUi(),
+        Inputs = _sim.GetTypedInputsUi(),
+        Outputs = _sim.GetTypedOutputsUi(),
         Explanation = _sim.Project?.Name ?? "",
         Catalog = _sim.GetLibrary(),
         ActiveProgramId = _sim.Active?.Id
         ,ModbusStatus = _modbus.ConnectionStatus
         ,ModbusError = _modbus.LastError
-        ,TargetActions = new[]
-        {
-            TargetActionsViewModel.From(new AtlasSoftPlc.Runtime.Targets.AtlasRuntimeTargetAdapter(_runtime), "Atlas Runtime"),
-            TargetActionsViewModel.From(new ModbusOnlineAdapter(), "Modbus Online")
-        }
-    };
+        ,TargetActions = descriptors.Select(t => TargetActionsViewModel.From(t, statuses[t.Id])).ToArray()
+        ,TargetStatuses = statuses
+        };
+    }
 
     [ResponseCache(Duration = 0, Location = ResponseCacheLocation.None, NoStore = true)]
     public IActionResult Error()
@@ -115,14 +302,15 @@ public sealed class DashboardViewModel
 {
     public RuntimeSnapshot Runtime { get; set; } = RuntimeSnapshot.Initial;
     public Project Project { get; set; } = null!;
-    public Dictionary<string, object> Inputs { get; set; } = new();
-    public Dictionary<string, object> Outputs { get; set; } = new();
+    public IReadOnlyList<IoPointViewModel> Inputs { get; set; } = Array.Empty<IoPointViewModel>();
+    public IReadOnlyList<IoPointViewModel> Outputs { get; set; } = Array.Empty<IoPointViewModel>();
     public string Explanation { get; set; } = "";
     public IReadOnlyList<PlcProgramDefinition> Catalog { get; set; } = new List<PlcProgramDefinition>();
     public Guid? ActiveProgramId { get; set; }
     public string ModbusStatus { get; set; } = "Disabled";
     public string? ModbusError { get; set; }
     public IReadOnlyList<TargetActionsViewModel> TargetActions { get; set; } = Array.Empty<TargetActionsViewModel>();
+    public IReadOnlyDictionary<string, TargetRuntimeStatus> TargetStatuses { get; set; } = new Dictionary<string, TargetRuntimeStatus>();
 }
 
 public sealed class TargetActionsViewModel
@@ -135,15 +323,20 @@ public sealed class TargetActionsViewModel
     public bool Deploy { get; init; }
     public bool Verify { get; init; }
 
-    public static TargetActionsViewModel From(IPlcTargetAdapter target, string name) => new()
+    public string ConnectionState { get; init; } = "Unknown";
+    public string ConnectionDetail { get; init; } = "";
+
+    public static TargetActionsViewModel From(TargetDescriptor target, TargetRuntimeStatus status) => new()
     {
-        Name = name,
+        Name = target.DisplayName,
         Simulate = target.Capabilities.Supports(TargetCapability.Simulate),
         Monitor = target.Capabilities.Supports(TargetCapability.ReadLiveData),
         Generate = target.Capabilities.Supports(TargetCapability.GenerateSource) || target.Capabilities.Supports(TargetCapability.GenerateProject),
         Compile = target.Capabilities.Supports(TargetCapability.Compile),
         Deploy = target.Capabilities.Supports(TargetCapability.DeployProgram) || target.Capabilities.Supports(TargetCapability.DeployHardware),
-        Verify = target.Capabilities.Supports(TargetCapability.VerifyDeployment)
+        Verify = target.Capabilities.Supports(TargetCapability.VerifyDeployment),
+        ConnectionState = status.State,
+        ConnectionDetail = status.Detail ?? ""
     };
 }
 

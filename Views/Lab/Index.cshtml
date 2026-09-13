@@ -1,0 +1,32 @@
+@model AtlasSoftPlc.Web.Controllers.LabViewModel
+@{ ViewData["Title"] = "Laboratorio de conectores"; }
+<div class="mb-3">
+    <h1>Laboratorio de conectores</h1>
+    <p class="text-muted">Casos persistidos disponibles para validar el canal online. El estado se obtiene del probe del target.</p>
+</div>
+@if (TempData["LabResult"] is string result) { <div class="alert alert-info">@result</div> }
+<div class="table-responsive"><table class="table table-sm align-middle">
+<thead><tr><th>Programa</th>@foreach (var target in Model.Targets.Where(t => t.Category != AtlasSoftPlc.Targets.TargetCategory.EngineeringExport)) { <th>@target.DisplayName</th> }</tr></thead>
+<tbody>
+@foreach (var program in Model.Programs)
+{
+    <tr><td><strong>@program.Name</strong><br /><span class="text-muted small">v@(program.Version)</span></td>
+    @foreach (var target in Model.Targets.Where(t => t.Category != AtlasSoftPlc.Targets.TargetCategory.EngineeringExport))
+    {
+        var status = Model.Statuses[target.Id];
+        <td><span class="badge @(status.State == "Detected" ? "text-bg-success" : status.State == "Assisted" ? "text-bg-warning" : "text-bg-secondary")">@status.State</span>
+            @if (status.State is "Detected" or "Assisted" && target.Id is "siemens-s7" or "rockwell-logix" or "mitsubishi-melsec" or "omron-sysmac" or "beckhoff-twincat") { <form asp-action="Run" method="post" class="mt-1"><input type="hidden" name="targetId" value="@target.Id" /><input type="hidden" name="programId" value="@program.Id" /><button class="btn btn-sm btn-outline-success" type="submit">Probar I/O</button></form> }
+        </td>
+    }
+    </tr>
+}
+</tbody></table></div>
+<h2 class="h5 mt-4">Batería completa</h2>
+<div class="d-flex flex-wrap gap-2">
+@foreach (var target in Model.Targets.Where(t => t.Id is "siemens-s7" or "rockwell-logix" or "mitsubishi-melsec" or "omron-sysmac" or "beckhoff-twincat"))
+{
+    var status = Model.Statuses[target.Id];
+    @if (status.State is "Detected" or "Assisted") { <form asp-action="RunAll" method="post"><input type="hidden" name="targetId" value="@target.Id" /><button class="btn btn-success" type="submit">Ejecutar 10 casos en @target.DisplayName</button></form> }
+}
+</div>
+<p class="small text-muted">Esta matriz no convierte un probe de transporte en un despliegue de programa. Las operaciones de escritura deben ejecutarse desde un adapter online validado.</p>

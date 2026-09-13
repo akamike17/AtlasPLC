@@ -1,0 +1,23 @@
+@model AtlasSoftPlc.Web.Controllers.TargetsViewModel
+@using AtlasSoftPlc.Targets
+@{ ViewData["Title"] = "Targets"; }
+<div class="d-flex justify-content-between align-items-center mb-3"><div><h1>Targets</h1><p class="text-muted mb-0">Selecciona dónde quieres llevar el proyecto. Las acciones reflejan capacidades reales.</p></div></div>
+<div class="row g-3">
+@foreach (var target in Model.Targets)
+{
+    <div class="col-12 col-md-6 col-xl-4"><div class="card h-100 shadow-sm">
+        @{ var status = Model.Statuses[target.Id]; }
+        <div class="card-body"><div class="d-flex justify-content-between gap-2"><h5>@target.DisplayName</h5><span class="badge text-bg-secondary">@target.ImplementationState</span></div>
+        <div class="small text-muted mb-2">@target.Category · @target.DeploymentMode</div><p>@target.Description</p>
+        <div class="small mb-2"><strong>Probe:</strong> @status.State — @status.Detail</div>
+        <div class="small mb-3 text-muted">Evidencia reproducible: docs/CONNECTOR_TEST_EVIDENCE.md</div>
+        <div class="small mb-3"><strong>Capacidades:</strong> @(target.Capabilities.IsEmpty ? "Ninguna declarada" : string.Join(", ", target.Capabilities.All))</div>
+        <div class="small text-muted">Formatos: @(target.SupportedArtifactKinds.Count == 0 ? "—" : string.Join(", ", target.SupportedArtifactKinds))</div></div>
+        <div class="card-footer bg-transparent"><button class="btn btn-outline-primary btn-sm configure-target" type="button" data-target="@target.Id">Configurar conexión</button><div class="target-config mt-3" data-config-for="@target.Id" hidden><form asp-action="SaveConfiguration" method="post">@Html.AntiForgeryToken()<input type="hidden" name="targetId" value="@target.Id" /><label class="form-label small">Endpoint / host</label><input name="endpoint" class="form-control form-control-sm config-endpoint" value="@(Model.Configurations.TryGetValue(target.Id, out var saved) ? saved.Endpoint : "127.0.0.1")" placeholder="127.0.0.1" /><div class="row g-2 mt-1"><div class="col"><label class="form-label small">Puerto</label><input name="port" type="number" min="1" max="65535" class="form-control form-control-sm config-port" value="@(Model.Configurations.TryGetValue(target.Id, out saved) ? saved.Port : (target.Id.Contains("modbus", StringComparison.OrdinalIgnoreCase) ? 502 : 1102))" /></div><div class="col"><label class="form-label small">Timeout ms</label><input name="timeoutMs" type="number" min="100" max="60000" class="form-control form-control-sm" value="@(Model.Configurations.TryGetValue(target.Id, out saved) ? saved.TimeoutMs : 1500)" /></div></div><button type="submit" class="btn btn-sm btn-success mt-2">Guardar configuración</button></form><span class="small text-muted ms-2 config-result"></span></div></div>
+    </div></div>
+}
+</div>
+<script>
+document.querySelectorAll('.configure-target').forEach(b => b.addEventListener('click', () => { const p=document.querySelector(`[data-config-for="${b.dataset.target}"]`); p.hidden=!p.hidden; }));
+document.querySelectorAll('.save-target-config').forEach(b => b.addEventListener('click', () => { const p=b.closest('.target-config'); const key='atlas-target-'+p.dataset.configFor; localStorage.setItem(key, JSON.stringify({endpoint:p.querySelector('.config-endpoint').value,port:p.querySelector('.config-port').value})); p.querySelector('.config-result').textContent='Configuración guardada · lista para probar'; }));
+</script>

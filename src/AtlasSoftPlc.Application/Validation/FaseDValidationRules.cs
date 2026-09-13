@@ -224,7 +224,13 @@ public sealed class InterlockDominanceValidationRule : IValidationRule
         foreach (var outId in rules.SelectMany(r => r.Actions.OfType<SetOutputAction>()).Select(a => a.VariableId).Distinct())
         {
             var starters = rules.Where(r => r.Actions.OfType<SetOutputAction>().Any(a => a.VariableId == outId && a.Value.Equals("true", StringComparison.OrdinalIgnoreCase))).ToList();
-            var stoppers = rules.Where(r => r.Actions.OfType<SetOutputAction>().Any(a => a.VariableId == outId && a.Value.Equals("false", StringComparison.OrdinalIgnoreCase))).ToList();
+            // Una salida también puede tener un stop seguro en la rama falsa
+            // de la regla (por ejemplo, el reset natural de un TON). Esa rama
+            // debe contar como escritor de apagado para no generar un falso
+            // positivo de dominancia.
+            var stoppers = rules.Where(r =>
+                r.Actions.OfType<SetOutputAction>().Any(a => a.VariableId == outId && a.Value.Equals("false", StringComparison.OrdinalIgnoreCase)) ||
+                r.ElseActions.OfType<SetOutputAction>().Any(a => a.VariableId == outId && a.Value.Equals("false", StringComparison.OrdinalIgnoreCase))).ToList();
 
             // Si existe un starter, debe existir un stopper con prioridad >= starter (stop domina start, spec §5).
             if (starters.Count > 0)

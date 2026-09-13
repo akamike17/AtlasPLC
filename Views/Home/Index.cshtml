@@ -1,6 +1,6 @@
 ﻿@model AtlasSoftPlc.Web.Controllers.DashboardViewModel
 @{
-    ViewData["Title"] = "Dashboard";
+    ViewData["Title"] = "Estado";
     var rt = Model.Runtime;
     var stateClass = rt.State switch
     {
@@ -61,10 +61,8 @@
     <!-- ALARMA PRINCIPAL: E-Stop siempre visible si está activo -->
     <div class="col-12 col-lg-4">
         @{
-            var estopInput = Model.Inputs.Values
-                            .Cast<dynamic>()
-                            .FirstOrDefault(i => i.key == "EmergencyStop");
-                        var estopOn = estopInput is not null && (bool)estopInput.value;
+            var estopInput = Model.Inputs.FirstOrDefault(i => i.Key == "EmergencyStop");
+                        var estopOn = estopInput?.Value == true;
         }
         <div class="card h-100 shadow-sm @(estopOn ? "border-danger" : "border-0")"
              style="@(estopOn ? "box-shadow: 0 0 0 2px #dc3545;" : "")">
@@ -103,11 +101,24 @@
                         </button>
                     </form>
                 }
-                <a asp-controller="Home" asp-action="Simulation" class="btn btn-lg btn-outline-primary">Simulación completa</a>
-                <a asp-controller="Home" asp-action="Diagnostics" class="btn btn-lg btn-outline-secondary">Diagnóstico</a>
+                <a asp-controller="Home" asp-action="Simulation" class="btn btn-lg btn-outline-primary">Abrir simulador</a>
+                <a asp-controller="Review" asp-action="Index" class="btn btn-lg btn-outline-secondary">Revisión y envío</a>
             </div>
         </div>
     </div>
+</div>
+
+<div class="card shadow-sm border-0 mt-4 mb-4">
+    <div class="card-header bg-dark text-white"><span>ESTADO Y SERVICIOS DETECTADOS</span></div>
+    <div class="card-body"><div class="row g-2">
+    @foreach (var target in Model.TargetActions)
+    {
+        <div class="col-12 col-md-6 col-xl-4"><div class="border rounded p-2 h-100">
+            <div class="d-flex justify-content-between"><strong>@target.Name</strong><span class="badge @(target.ConnectionState == "Detected" ? "text-bg-success" : target.ConnectionState == "Assisted" ? "text-bg-warning" : "text-bg-secondary")">@target.ConnectionState</span></div>
+            <small class="text-muted">@target.ConnectionDetail</small>
+        </div></div>
+    }
+    </div></div>
 </div>
 
 <!-- ENTRADAS Y SALIDAS: nombres legibles, colores ISA-101 -->
@@ -121,13 +132,12 @@
                         <tr><th>Variable</th><th style="width: 120px;">Estado</th><th style="width: 140px;">Acción</th></tr>
                     </thead>
                     <tbody>
-                        @foreach (var kv in Model.Inputs)
+                        @foreach (var input in Model.Inputs)
                         {
-                            var input = (dynamic)kv.Value;
-                            var isOn = (bool)input.value;
-                            var isEstop = (string)input.key == "EmergencyStop";
-                            <tr data-id="@input.id" class="@(isEstop ? "table-warning" : "")">
-                                <td class="@(isEstop ? "fw-bold" : "")">@input.displayName</td>
+                            var isOn = input.Value;
+                            var isEstop = input.Key == "EmergencyStop";
+                            <tr data-id="@input.Id" class="@(isEstop ? "table-warning" : "")">
+                                <td class="@(isEstop ? "fw-bold" : "")">@input.DisplayName</td>
                                 <td>
                                     <span class="badge @(isOn ? "bg-success" : "bg-secondary") fs-6 px-3 py-2">
                                         @(isOn ? "ON" : "OFF")
@@ -135,7 +145,7 @@
                                 </td>
                                 <td>
                                     <button class="btn btn-sm @(isOn ? "btn-outline-secondary" : "btn-outline-primary") toggle-input"
-                                            data-id="@input.id" data-value="@(!isOn)">
+                                            data-id="@input.Id" data-value="@(!isOn)">
                                         @(isOn ? "Apagar" : "Encender")
                                     </button>
                                 </td>
@@ -156,12 +166,11 @@
                         <tr><th>Variable</th><th style="width: 120px;">Estado</th><th style="width: 140px;">Por qué</th></tr>
                     </thead>
                     <tbody id="outputsBody">
-                        @foreach (var kv in Model.Outputs)
+                        @foreach (var output in Model.Outputs)
                         {
-                            var output = (dynamic)kv.Value;
-                            var isOn = (bool)output.value;
-                            <tr data-id="@output.id">
-                                <td>@output.displayName</td>
+                            var isOn = output.Value;
+                            <tr data-id="@output.Id">
+                                <td>@output.DisplayName</td>
                                 <td>
                                     <span class="badge @(isOn ? "bg-success" : "bg-secondary") fs-6 px-3 py-2">
                                         @(isOn ? "ON" : "OFF")
@@ -169,7 +178,7 @@
                                 </td>
                                 <td>
                                     <button class="btn btn-sm btn-link p-0 text-decoration-none explain-btn"
-                                            data-id="@output.id" data-name="@output.displayName">
+                                            data-id="@output.Id" data-name="@output.DisplayName">
                                         <small class="text-muted">¿Por qué?</small>
                                     </button>
                                 </td>
@@ -217,15 +226,15 @@
 
                 // Mapa id → nombre legible de salidas/entradas (renderizado server-side).
                 const outputNames = {
-                    @foreach (var kv in Model.Outputs)
+                    @foreach (var output in Model.Outputs)
                     {
-                        <text>"@kv.Key": "@((dynamic)kv.Value).displayName",</text>
+                        <text>"@output.Id": "@output.DisplayName",</text>
                     }
                 };
                 const inputNames = {
-                    @foreach (var kv in Model.Inputs)
+                    @foreach (var input in Model.Inputs)
                     {
-                        <text>"@kv.Key": "@((dynamic)kv.Value).displayName",</text>
+                        <text>"@input.Id": "@input.DisplayName",</text>
                     }
                 };
 

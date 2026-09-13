@@ -1,0 +1,7 @@
+@model AtlasSoftPlc.Web.Controllers.VersionCompareViewModel
+@{ ViewData["Title"] = "Comparar versiones"; }
+<h1>Comparación de versiones</h1>
+<p class="text-muted">v@Model.Left.VersionNumber (@Model.Left.Hash[..Math.Min(12, Model.Left.Hash.Length)]) → v@Model.Right.VersionNumber (@Model.Right.Hash[..Math.Min(12, Model.Right.Hash.Length)])</p>
+@if (Model.Changes.Count == 0) { <div class="alert alert-success">Las versiones son equivalentes.</div> }
+else { <div class="card border-warning"><div class="card-header">Cambios detectados: @Model.Changes.Count</div><ul class="list-group list-group-flush">@foreach (var change in Model.Changes) { <li class="list-group-item">@change</li> }</ul></div> }
+<a asp-action="Index" class="btn btn-primary mt-3">Volver a revisión</a>

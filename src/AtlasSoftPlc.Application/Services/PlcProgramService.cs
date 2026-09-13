@@ -41,11 +41,14 @@ public sealed class PlcProgramService
     public async Task EnsureSeededAsync(CancellationToken ct = default)
     {
         var existing = await _repo.GetAllAsync(ct);
-        if (existing.Count > 0)
-            return;
-
-        await _repo.SaveAsync(PlcProgramCatalog.BuildTankDemo(), ct);
-        await _repo.SaveAsync(PlcProgramCatalog.BuildIrrigationDemo(), ct);
+        var templates = PlcProgramCatalog.BuildTemplateCatalog();
+        var existingNames = existing.Select(x => x.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (var program in templates)
+            if (!existingNames.Contains(program.Name))
+            {
+                program.IsTemplate = true;
+                await _repo.SaveAsync(program, ct);
+            }
     }
 
     /// <summary>Hash SHA-256 determinista del contenido SEMÁNTICO completo del programa (P0-3).</summary>

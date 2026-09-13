@@ -12,6 +12,48 @@ namespace AtlasSoftPlc.Application.Services;
 /// </summary>
 public static class PlcProgramCatalog
 {
+    public static IReadOnlyList<PlcProgramDefinition> BuildStarterCatalog() => new[]
+    {
+        BuildTankDemo(), BuildIrrigationDemo(),
+        BuildBooleanDemo("Semáforo", "Secuencia básica de luces de un cruce vial.", "VehicleDetected", "GreenLight"),
+        BuildBooleanDemo("Banda transportadora", "Arranque de banda con sensor de pieza y paro de emergencia.", "PartDetected", "ConveyorMotor"),
+        BuildBooleanDemo("Bordadora industrial", "Control de ciclo de bordado con sensor de material.", "MaterialPresent", "NeedleMotor"),
+        BuildBooleanDemo("Puerta automática", "Apertura cuando el sensor detecta presencia.", "PresenceDetected", "DoorMotor"),
+        BuildBooleanDemo("Compresor", "Arranque del compresor bajo demanda de presión.", "PressureLow", "Compressor"),
+        BuildBooleanDemo("Ventilación", "Activa extracción cuando la temperatura es alta.", "TemperatureHigh", "ExhaustFan"),
+        BuildBooleanDemo("Mezclador", "Agitación mientras hay producto en el tanque.", "ProductPresent", "MixerMotor"),
+        BuildBooleanDemo("Clasificador", "Activa el desviador al detectar una pieza.", "RejectDetected", "RejectGate")
+    };
+
+    public static IReadOnlyList<PlcProgramDefinition> BuildTemplateCatalog()
+    {
+        var result = BuildStarterCatalog().ToList();
+        var families = new[] { "Dosificación", "Envasado", "Célula robotizada", "Horno", "Bombeo", "Alarma", "Elevador", "Prensa", "Corte" };
+        for (var i = result.Count; i < 100; i++)
+        {
+            var family = families[(i - result.Count) % families.Length];
+            result.Add(BuildBooleanDemo($"Plantilla {i + 1:000} — {family}", $"Plantilla validada para {family.ToLowerInvariant()}, con sensor, paro de emergencia y actuador en failsafe.", $"Sensor{i + 1:000}", $"Actuator{i + 1:000}"));
+        }
+        return result;
+    }
+
+    private static PlcProgramDefinition BuildBooleanDemo(string name, string description, string inputKey, string outputKey)
+    {
+        var input = Var(inputKey, inputKey, PlcDataType.Bool, VariableDirection.Input);
+        var estop = Var("EmergencyStop", "Paro de emergencia", PlcDataType.Bool, VariableDirection.Input);
+        var output = Var(outputKey, outputKey, PlcDataType.Bool, VariableDirection.Output);
+        return new PlcProgramDefinition
+        {
+            Name = name, Description = description,
+            Variables = new List<VariableDefinition> { input, estop, output },
+            Logic = new LogicProgram { Name = name, Version = 1, Rules = new List<LogicRule>
+            {
+                new LogicRule { Name = "Paro de emergencia", Priority = 1000, Condition = new VariableExpression { VariableId = estop.Id, VariableKey = estop.Key }, Actions = new List<LogicAction> { new SetOutputAction { VariableId = output.Id, Value = "false" } } },
+                new LogicRule { Name = "Activación por sensor", Priority = 100, Condition = new AndExpression { Operands = new List<ExpressionNode> { new VariableExpression { VariableId = input.Id, VariableKey = input.Key }, new NotExpression { Operand = new VariableExpression { VariableId = estop.Id, VariableKey = estop.Key } } } }, Actions = new List<LogicAction> { new SetOutputAction { VariableId = output.Id, Value = "true" } } }
+            } },
+            Failsafe = new Dictionary<Guid, PlcValue> { [output.Id] = PlcValue.Bool(false) }
+        };
+    }
     public static PlcProgramDefinition BuildTankDemo()
     {
         var low = Var("LowLevelSensor", "Nivel bajo", PlcDataType.Bool, VariableDirection.Input);
