@@ -196,18 +196,6 @@
         document.querySelectorAll('[data-view]').forEach(a => a.addEventListener('click', () => activateView(a.dataset.view)));
         activateView(location.hash === '#projects-title' ? 'projects' : location.hash === '#templates-title' ? 'templates' : 'editor');
 
-        const editorHint = document.getElementById('editor-hint');
-        document.querySelectorAll('.graph-node').forEach(node => {
-            node.draggable = true;
-            node.addEventListener('dragstart', e => e.dataTransfer.setData('text/plain', node.dataset.ioId || node.dataset.logic || node.dataset.outputId || 'block'));
-            node.addEventListener('dblclick', () => { const name = prompt('Nombre del bloque', node.querySelector('strong')?.textContent || ''); if (name) { node.querySelector('strong').textContent = name; editorHint.textContent = `Bloque renombrado: ${name}. Pulsa Guardar diseño para conservar la posición.`; } });
-        });
-        document.querySelectorAll('.palette-item').forEach(item => item.addEventListener('dragstart', e => e.dataTransfer.setData('text/plain', `new:${item.dataset.kind}`)));
-        const graph = document.querySelector('.plc-graph');
-        graph?.addEventListener('dragover', e => e.preventDefault());
-        graph?.addEventListener('drop', e => { e.preventDefault(); const kind = e.dataTransfer.getData('text/plain'); if (!kind.startsWith('new:')) return; const node = document.createElement('button'); node.type='button'; node.className=`graph-node graph-interactive ${kind === 'new:input' ? 'input-node' : kind === 'new:output' ? 'output-node' : 'timer-node'}`; node.draggable=true; node.innerHTML=`<strong>${kind === 'new:input' ? 'Nueva entrada' : kind === 'new:output' ? 'Nueva salida' : 'Nuevo TON'}</strong><small>Bloque agregado al diseño</small>`; graph.querySelector(kind === 'new:output' ? '.outputs' : kind === 'new:input' ? '.inputs' : '.logic')?.append(node); editorHint.textContent='Bloque agregado. Doble clic para renombrarlo; usa Guardar diseño.'; });
-        document.getElementById('save-editor-layout')?.addEventListener('click', () => { localStorage.setItem('atlas-editor-layout', graph?.innerHTML || ''); editorHint.textContent='Diseño guardado localmente para este proyecto.'; });
-
         const editorCanvas = document.getElementById('pro-canvas');
         const editorHint = document.getElementById('editor-hint');
         const editorName = document.getElementById('editor-name');
@@ -236,7 +224,7 @@
         document.getElementById('editor-redo')?.addEventListener('click',()=>{if(!redoStack.length)return;undoStack.push(snapshotEditor());restoreEditor(redoStack.pop());updateHistory();editorHint.textContent='Cambio rehecho.';});
         document.addEventListener('keydown',e=>{if(e.key==='Delete'&&selectedEditorNode){rememberEditor();selectedEditorNode.remove();selectedEditorNode=null;renderEditorConnections();editorHint.textContent='Bloque eliminado.';}});
         document.getElementById('editor-save')?.addEventListener('click',()=>{localStorage.setItem('atlas-editor-layout',snapshotEditor());editorHint.textContent='Diseño y conexiones guardados.';});
-        document.getElementById('apply-graph-form')?.addEventListener('submit',()=>{const nodes=[...editorCanvas.querySelectorAll('.pro-node')].map(n=>({id:n.dataset.editorNode,name:n.querySelector('strong')?.textContent.trim(),kind:n.classList.contains('input-node')?'input':n.classList.contains('output-node')?'output':'logic'}));const inputs=nodes.filter(n=>n.kind==='input'),outputs=nodes.filter(n=>n.kind==='output');const edges=inputs.flatMap(i=>outputs.map(o=>({from:i.name,to:o.name})));document.getElementById('graph-json').value=JSON.stringify({nodes,edges});});
+        document.getElementById('apply-graph-form')?.addEventListener('submit',()=>{const nodes=[...editorCanvas.querySelectorAll('.pro-node')].map(n=>({id:n.dataset.editorNode,name:n.querySelector('strong')?.textContent.trim(),kind:n.classList.contains('input-node')?'input':n.classList.contains('output-node')?'output':'logic'}));const byId=Object.fromEntries(nodes.map(n=>[n.id,n]));const edges=[];nodes.filter(n=>n.kind==='input').forEach(input=>{const seen=new Set([input.id]),queue=[input.id];while(queue.length){const id=queue.shift();editorConnections.filter(e=>e[0]===id).forEach(e=>{if(seen.has(e[1]))return;seen.add(e[1]);queue.push(e[1]);const target=byId[e[1]];if(target?.kind==='output')edges.push({from:input.name,to:target.name});});}});document.getElementById('graph-json').value=JSON.stringify({nodes,edges});});
 
         document.querySelectorAll('.graph-node[data-io-id]').forEach(node => node.addEventListener('click', () => {
             const toggle = document.querySelector(`.toggle-btn[data-id="${node.dataset.ioId}"]`);

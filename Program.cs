@@ -2,6 +2,7 @@ using System.Security.Claims;
 using AtlasSoftPlc.Application.Logic;
 using AtlasSoftPlc.Application.Services;
 using AtlasSoftPlc.Application.Validation;
+using AtlasSoftPlc.Application.Graph;
 using AtlasSoftPlc.Domain.Runtime;
 using AtlasSoftPlc.Infrastructure.Persistence;
 using AtlasSoftPlc.Runtime.Hosting;
@@ -55,6 +56,10 @@ if (builder.Environment.IsDevelopment())
 builder.Services.AddControllersWithViews();
 builder.Services.AddSignalR();
 builder.Services.AddMemoryCache();
+builder.Services.AddSingleton<IGraphValidator, GraphValidator>();
+builder.Services.AddSingleton<IGraphLowerer, GraphLowerer>();
+builder.Services.AddSingleton<IGraphDocumentRepository, SqliteGraphDocumentRepository>();
+builder.Services.AddScoped<IProgramValidationPipeline, ProgramValidationPipeline>();
 builder.Services.AddSingleton<ITargetRegistry, TargetRegistry>();
 
 // Antiforgery para APIs JSON (sección de seguridad): token esperado en el header.

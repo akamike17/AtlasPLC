@@ -2,6 +2,9 @@ using System.Diagnostics;
 using System.Text.Json;
 using System.Globalization;
 using AtlasSoftPlc.Application.Services;
+using AtlasSoftPlc.Application.Graph;
+using AtlasSoftPlc.Application.Validation;
+using AtlasSoftPlc.Domain.Graph;
 using AtlasSoftPlc.Domain.Projects;
 using AtlasSoftPlc.Domain.Runtime;
 using AtlasSoftPlc.Runtime.Hosting;
@@ -21,8 +24,12 @@ public class HomeController : Controller
     private readonly ModbusIoService _modbus;
     private readonly ITargetRegistry _targets;
     private readonly ProgramVersionService _versions;
+    private readonly IGraphValidator _graphValidator;
+    private readonly IGraphLowerer _graphLowerer;
+    private readonly IProgramValidationPipeline _validationPipeline;
+    private readonly IGraphDocumentRepository _graphDocuments;
 
-    public HomeController(RuntimeStateStore store, PlcRuntimeService runtime, SimulationService sim, ModbusIoService modbus, ITargetRegistry targets, ProgramVersionService versions)
+    public HomeController(RuntimeStateStore store, PlcRuntimeService runtime, SimulationService sim, ModbusIoService modbus, ITargetRegistry targets, ProgramVersionService versions, IGraphValidator graphValidator, IGraphLowerer graphLowerer, IProgramValidationPipeline validationPipeline, IGraphDocumentRepository graphDocuments)
     {
         _store = store;
         _runtime = runtime;
@@ -30,6 +37,10 @@ public class HomeController : Controller
         _modbus = modbus;
         _targets = targets;
         _versions = versions;
+        _graphValidator = graphValidator;
+        _graphLowerer = graphLowerer;
+        _validationPipeline = validationPipeline;
+        _graphDocuments = graphDocuments;
     }
 
     private void EnsureDemo()
@@ -196,16 +207,29 @@ public class HomeController : Controller
         try
         {
             using var doc = JsonDocument.Parse(graphJson);
-            var nodes = doc.RootElement.GetProperty("nodes");
-            foreach (var node in nodes.EnumerateArray())
+            var graph = new GraphDocument { ProjectId = _sim.Active.Id, ProgramId = _sim.Active.Id };
+            var ids = new Dictionary<string, Guid>(StringComparer.OrdinalIgnoreCase);
+            foreach (var node in doc.RootElement.GetProperty("nodes").EnumerateArray())
             {
-                var kind = node.GetProperty("kind").GetString();
-                var name = node.GetProperty("name").GetString();
-                if (string.IsNullOrWhiteSpace(name) || kind is not ("input" or "output")) continue;
-                _sim.AddBooleanComponent(name, kind == "input" ? AtlasSoftPlc.Domain.Common.VariableDirection.Input : AtlasSoftPlc.Domain.Common.VariableDirection.Output);
+                var rawId = node.GetProperty("id").GetString() ?? Guid.NewGuid().ToString();
+                var id = Guid.TryParse(rawId, out var parsed) ? parsed : Guid.NewGuid(); ids[rawId] = id;
+                var kindText = node.GetProperty("kind").GetString() ?? "";
+                var kind = kindText.ToLowerInvariant() switch { "input" or "sensor" => GraphNodeKind.Input, "output" or "pump" => GraphNodeKind.Output, "logic" or "and" => GraphNodeKind.And, "or" => GraphNodeKind.Or, "not" => GraphNodeKind.Not, _ => GraphNodeKind.Memory };
+                graph.Nodes.Add(new GraphNode { Id = id, Kind = kind, Name = node.GetProperty("name").GetString() ?? rawId });
             }
             foreach (var edge in doc.RootElement.GetProperty("edges").EnumerateArray())
-                _sim.ConnectInputToOutput(edge.GetProperty("from").GetString()!, edge.GetProperty("to").GetString()!);
+            {
+                var from = edge.GetProperty("from").GetString() ?? ""; var to = edge.GetProperty("to").GetString() ?? "";
+                if (!ids.TryGetValue(from, out var fromId) || !ids.TryGetValue(to, out var toId)) { TempData["BuilderMessage"] = "Conexión inválida: el nodo origen o destino no existe."; return RedirectToAction(nameof(Simulation)); }
+                graph.Edges.Add(new GraphEdge { FromNodeId = fromId, ToNodeId = toId });
+            }
+            var graphReport = _graphValidator.Validate(graph);
+            if (!graphReport.IsValid) { TempData["BuilderMessage"] = "Diseño rechazado: " + string.Join(" ", graphReport.Diagnostics.Select(x => x.Message).Take(3)); return RedirectToAction(nameof(Simulation)); }
+            var candidate = _graphLowerer.Lower(graph, graphReport); candidate.Id = _sim.Active.Id; candidate.Name = _sim.Active.Name;
+            var candidateValidation = _validationPipeline.Validate(candidate.Logic, candidate.Variables.ToDictionary(x => x.Id), ValidationOperation.Simulation);
+            if (!candidateValidation.Allowed) { TempData["BuilderMessage"] = "Diseño rechazado por validación: " + string.Join(" ", candidateValidation.Report.Issues.Select(x => x.Message).Take(3)); return RedirectToAction(nameof(Simulation)); }
+            if (!_sim.RestoreProgramDefinition(JsonSerializer.Serialize(candidate))) { TempData["BuilderMessage"] = "No se pudo aplicar el diseño; el proyecto quedó sin cambios."; return RedirectToAction(nameof(Simulation)); }
+            _graphDocuments.SaveAsync(graph).GetAwaiter().GetResult();
             SaveVersion("Diseño gráfico aplicado al proyecto");
             TempData["BuilderMessage"] = "Diseño gráfico validado y aplicado al simulador en estado seguro.";
         }

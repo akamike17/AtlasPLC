@@ -1,6 +1,7 @@
 using AtlasSoftPlc.Domain.Logic;
 using AtlasSoftPlc.Domain.Projects;
 using AtlasSoftPlc.Domain.Variables;
+using AtlasSoftPlc.Domain.Graph;
 
 namespace AtlasSoftPlc.Application.Services;
 
@@ -24,6 +25,12 @@ public interface ILogicProgramRepository
 {
     Task<LogicProgram?> GetActiveAsync(Guid projectId, CancellationToken ct = default);
     Task SaveAsync(LogicProgram program, CancellationToken ct = default);
+}
+
+public interface IGraphDocumentRepository
+{
+    Task<GraphDocument?> GetAsync(Guid programId, CancellationToken ct = default);
+    Task SaveAsync(GraphDocument graph, CancellationToken ct = default);
 }
 
 /// <summary>Servicio de proyectos (sección 43). Delgado, sin lógica industrial.</summary>
