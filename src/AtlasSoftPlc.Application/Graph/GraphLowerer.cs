@@ -19,9 +19,9 @@ public sealed class GraphLowerer : IGraphLowerer
         if (!validation.IsValid) throw new InvalidOperationException("No se puede traducir un gráfico inválido.");
         var result = new PlcProgramDefinition { Id = graph.ProgramId == Guid.Empty ? Guid.NewGuid() : graph.ProgramId, Name = "Programa gráfico", Variables = new() };
         var variableByNode = new Dictionary<Guid, VariableDefinition>();
-        foreach (var node in graph.Nodes.Where(x => x.Kind is GraphNodeKind.Input or GraphNodeKind.Output or GraphNodeKind.Memory))
+        foreach (var node in graph.Nodes.Where(x => x.Kind is GraphNodeKind.Input or GraphNodeKind.EmergencyStop or GraphNodeKind.Output or GraphNodeKind.Memory))
         {
-            var variable = new VariableDefinition { Id = node.Id, Key = node.Name, DisplayName = node.Name, Direction = node.Kind == GraphNodeKind.Input ? VariableDirection.Input : node.Kind == GraphNodeKind.Output ? VariableDirection.Output : VariableDirection.Memory, DataType = PlcDataType.Bool };
+            var variable = new VariableDefinition { Id = node.Id, Key = node.Name, DisplayName = node.Name, Direction = node.Kind is GraphNodeKind.Input or GraphNodeKind.EmergencyStop ? VariableDirection.Input : node.Kind == GraphNodeKind.Output ? VariableDirection.Output : VariableDirection.Memory, DataType = PlcDataType.Bool };
             result.Variables.Add(variable); variableByNode[node.Id] = variable;
             if (variable.Direction == VariableDirection.Output) result.Failsafe[variable.Id] = AtlasSoftPlc.Domain.Values.PlcValue.Bool(false);
         }
@@ -29,7 +29,28 @@ public sealed class GraphLowerer : IGraphLowerer
         {
             var source = graph.Edges.FirstOrDefault(x => x.ToNodeId == output.Id);
             if (source is null || !variableByNode.TryGetValue(output.Id, out var target)) continue;
-            var expression = BuildExpression(source.FromNodeId, graph, variableByNode, new HashSet<Guid>());
+            var sourceNode = graph.Nodes.Single(x => x.Id == source.FromNodeId);
+            ExpressionNode expression;
+            if (sourceNode.Kind is GraphNodeKind.Ton)
+            {
+                var timerId = sourceNode.Id;
+                var timerInput = graph.Edges.FirstOrDefault(x => x.ToNodeId == timerId);
+                if (timerInput is null) throw new InvalidOperationException($"El TON '{sourceNode.Name}' no tiene entrada.");
+                var preset = double.Parse(sourceNode.Properties["PresetMs"], System.Globalization.CultureInfo.InvariantCulture);
+                result.Logic.TimerIds.Add(timerId);
+                result.Logic.Rules.Add(new LogicRule
+                {
+                    Name = $"Iniciar {sourceNode.Name}", Priority = 200,
+                    Condition = BuildExpression(timerInput.FromNodeId, graph, variableByNode, new HashSet<Guid>()),
+                    Actions = new List<LogicAction> { new StartTimerAction { TimerId = timerId, PresetMs = preset } },
+                    ElseActions = new List<LogicAction> { new ResetTimerAction { TimerId = timerId } }, SourceIntent = "GraphEditor"
+                });
+                expression = new TimerStateExpression { TimerId = timerId, Field = "Done" };
+            }
+            else
+            {
+                expression = BuildExpression(source.FromNodeId, graph, variableByNode, new HashSet<Guid>());
+            }
             result.Logic.Rules.Add(new LogicRule { Name = $"{source.FromNodeId} activa {output.Name}", Priority = 100, Condition = expression, Actions = new List<LogicAction> { new SetOutputAction { VariableId = target.Id, Value = "true" } }, ElseActions = new List<LogicAction> { new SetOutputAction { VariableId = target.Id, Value = "false" } }, SourceIntent = "GraphEditor" });
         }
         return result;

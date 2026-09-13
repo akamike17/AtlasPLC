@@ -9,7 +9,7 @@ namespace AtlasSoftPlc.Infrastructure.Persistence;
 /// </summary>
 public static class SchemaMigrator
 {
-    public const int LatestVersion = 7;
+    public const int LatestVersion = 9;
 
     private static readonly (int Version, string Sql)[] Migrations =
     {
@@ -20,6 +20,8 @@ public static class SchemaMigrator
         (5, Migration5),
         (6, Migration6),
         (7, Migration7),
+        (8, Migration8),
+        (9, Migration9),
     };
 
     public static void Migrate(SqliteStore store)
@@ -199,5 +201,37 @@ CREATE TABLE IF NOT EXISTS ProgramTargetSelections (
     TargetId TEXT NOT NULL,
     UpdatedUtc TEXT NOT NULL
 );
+";
+
+    private const string Migration8 = @"
+CREATE TABLE IF NOT EXISTS TargetInstances (
+    Id TEXT PRIMARY KEY,
+    TargetPluginId TEXT NOT NULL,
+    DisplayName TEXT NOT NULL,
+    ConfigurationJson TEXT NOT NULL,
+    CredentialReference TEXT NULL,
+    UpdatedUtc TEXT NOT NULL
+);
+INSERT INTO TargetInstances(Id, TargetPluginId, DisplayName, ConfigurationJson, CredentialReference, UpdatedUtc)
+SELECT TargetId, TargetId, TargetId, json_object('endpoint', Endpoint, 'port', CAST(Port AS TEXT), 'timeoutMs', CAST(TimeoutMs AS TEXT)), NULL, UpdatedUtc
+FROM TargetConfigurations
+WHERE NOT EXISTS (SELECT 1 FROM TargetInstances WHERE TargetInstances.Id = TargetConfigurations.TargetId);
+";
+
+    private const string Migration9 = @"
+CREATE TABLE IF NOT EXISTS GeneratedArtifacts (
+    Id TEXT PRIMARY KEY,
+    ProgramId TEXT NOT NULL,
+    ProgramHash TEXT NOT NULL,
+    TargetInstanceId TEXT NULL,
+    Kind TEXT NOT NULL,
+    FileName TEXT NOT NULL,
+    Content BLOB NOT NULL,
+    ArtifactHash TEXT NOT NULL,
+    CreatedUtc TEXT NOT NULL,
+    Status TEXT NOT NULL,
+    DiagnosticsJson TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS IX_GeneratedArtifacts_Program ON GeneratedArtifacts(ProgramId, CreatedUtc);
 ";
 }

@@ -23,7 +23,7 @@ public sealed class SchemaMigratorTests
         Assert.Equal(SchemaMigrator.LatestVersion, store.CurrentSchemaVersion());
 
         using var conn = store.OpenConnection();
-        foreach (var table in new[] { "Projects", "Variables", "Devices", "LogicPrograms", "LogicProgramVersions", "AuditEvents", "HistorianSamples", "AlarmInstances", "AlarmDefinitions", "Settings", "Users", "SchemaMigrations" })
+        foreach (var table in new[] { "Projects", "Variables", "Devices", "LogicPrograms", "LogicProgramVersions", "AuditEvents", "HistorianSamples", "AlarmInstances", "AlarmDefinitions", "Settings", "Users", "TargetInstances", "GeneratedArtifacts", "SchemaMigrations" })
         {
             using var cmd = conn.CreateCommand();
             cmd.CommandText = $"SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='{table}'";

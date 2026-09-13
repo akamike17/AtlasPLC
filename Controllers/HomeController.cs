@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 using System.Globalization;
 using AtlasSoftPlc.Application.Services;
 using AtlasSoftPlc.Application.Graph;
@@ -28,8 +29,10 @@ public class HomeController : Controller
     private readonly GraphApplicationService _graphApplication;
     private readonly IProgramTargetSelectionRepository _selections;
     private readonly ArtifactPipeline _artifacts;
+    private readonly ITargetPluginRegistry _pluginRegistry;
+    private readonly IGraphDocumentRepository _graphDocuments;
 
-    public HomeController(RuntimeStateStore store, PlcRuntimeService runtime, SimulationService sim, ModbusIoService modbus, ITargetRegistry targets, ProgramVersionService versions, GraphApplicationService graphApplication, ArtifactPipeline artifacts, IProgramTargetSelectionRepository selections)
+    public HomeController(RuntimeStateStore store, PlcRuntimeService runtime, SimulationService sim, ModbusIoService modbus, ITargetRegistry targets, ProgramVersionService versions, GraphApplicationService graphApplication, ArtifactPipeline artifacts, IProgramTargetSelectionRepository selections, ITargetPluginRegistry pluginRegistry, IGraphDocumentRepository graphDocuments)
     {
         _store = store;
         _runtime = runtime;
@@ -40,6 +43,8 @@ public class HomeController : Controller
         _graphApplication = graphApplication;
         _artifacts = artifacts;
         _selections = selections;
+        _pluginRegistry = pluginRegistry;
+        _graphDocuments = graphDocuments;
     }
 
     private void EnsureDemo()
@@ -225,8 +230,17 @@ public class HomeController : Controller
                 var rawId = node.GetProperty("id").GetString() ?? Guid.NewGuid().ToString();
                 var id = Guid.TryParse(rawId, out var parsed) ? parsed : Guid.NewGuid(); ids[rawId] = id;
                 var kindText = node.GetProperty("kind").GetString() ?? "";
-                var kind = kindText.ToLowerInvariant() switch { "input" or "sensor" => GraphNodeKind.Input, "output" or "pump" => GraphNodeKind.Output, "logic" or "and" => GraphNodeKind.And, "or" => GraphNodeKind.Or, "not" => GraphNodeKind.Not, _ => GraphNodeKind.Memory };
-                graph.Nodes.Add(new GraphNode { Id = id, Kind = kind, Name = node.GetProperty("name").GetString() ?? rawId });
+                var kind = kindText.ToLowerInvariant() switch { "input" or "sensor" => GraphNodeKind.Input, "output" or "pump" => GraphNodeKind.Output, "logic" or "and" => GraphNodeKind.And, "or" => GraphNodeKind.Or, "not" => GraphNodeKind.Not, "ton" => GraphNodeKind.Ton, "tof" => GraphNodeKind.Tof, "stop" or "emergencystop" => GraphNodeKind.EmergencyStop, "memory" => GraphNodeKind.Memory, _ => GraphNodeKind.Memory };
+                var properties = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+                if (node.TryGetProperty("properties", out var propertyElement) && propertyElement.ValueKind == JsonValueKind.Object)
+                    foreach (var property in propertyElement.EnumerateObject()) properties[property.Name] = property.Value.GetString() ?? property.Value.ToString();
+                var position = new GraphPosition();
+                if (node.TryGetProperty("position", out var positionElement) && positionElement.ValueKind == JsonValueKind.Object)
+                {
+                    if (positionElement.TryGetProperty("x", out var x) && x.TryGetDouble(out var px)) position.X = px;
+                    if (positionElement.TryGetProperty("y", out var y) && y.TryGetDouble(out var py)) position.Y = py;
+                }
+                graph.Nodes.Add(new GraphNode { Id = id, Kind = kind, Name = node.GetProperty("name").GetString() ?? rawId, Properties = properties, Position = position });
             }
             foreach (var edge in doc.RootElement.GetProperty("edges").EnumerateArray())
             {
@@ -240,6 +254,8 @@ public class HomeController : Controller
             TempData["BuilderMessage"] = "Diseño gráfico validado y aplicado al simulador en estado seguro.";
         }
         catch (JsonException) { TempData["BuilderMessage"] = "El diseño gráfico no es válido y no se aplicó."; }
+        catch (KeyNotFoundException) { TempData["BuilderMessage"] = "El diseño gráfico está incompleto: cada bloque requiere id, nombre y tipo."; }
+        catch (InvalidOperationException ex) { TempData["BuilderMessage"] = "El diseño gráfico no se aplicó: " + ex.Message; }
         return RedirectToAction(nameof(Simulation));
     }
 
@@ -302,6 +318,12 @@ public class HomeController : Controller
     {
         var descriptors = _targets.GetAll();
         var statuses = descriptors.ToDictionary(t => t.Id, t => _targets.GetStatusAsync(t.Id).GetAwaiter().GetResult(), StringComparer.OrdinalIgnoreCase);
+        var graph = _sim.Active is null ? null : _graphDocuments.GetAsync(_sim.Active.Id).GetAwaiter().GetResult();
+        var graphJson = graph is null ? "null" : JsonSerializer.Serialize(graph, new JsonSerializerOptions
+        {
+            PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+            Converters = { new JsonStringEnumConverter() }
+        });
         return new()
         {
         Runtime = _store.Snapshot,
@@ -313,9 +335,10 @@ public class HomeController : Controller
         ActiveProgramId = _sim.Active?.Id
         ,ModbusStatus = _modbus.ConnectionStatus
         ,ModbusError = _modbus.LastError
-        ,TargetActions = descriptors.Select(t => TargetActionsViewModel.From(t, statuses[t.Id])).ToArray()
+        ,TargetActions = descriptors.Select(t => TargetActionsViewModel.From(t, statuses[t.Id], _pluginRegistry.Get(t.Id)?.Actions ?? Array.Empty<TargetActionDescriptor>())).ToArray()
         ,TargetStatuses = statuses
         ,SelectedTargetId = _sim.Active is null ? null : _selections.GetAsync(_sim.Active.Id).GetAwaiter().GetResult()
+        ,GraphJson = graphJson
         };
     }
 
@@ -343,6 +366,7 @@ public sealed class DashboardViewModel
     public IReadOnlyList<TargetActionsViewModel> TargetActions { get; set; } = Array.Empty<TargetActionsViewModel>();
     public IReadOnlyDictionary<string, TargetRuntimeStatus> TargetStatuses { get; set; } = new Dictionary<string, TargetRuntimeStatus>();
     public string? SelectedTargetId { get; set; }
+    public string GraphJson { get; set; } = "null";
 }
 
 public sealed class TargetActionsViewModel
@@ -355,11 +379,12 @@ public sealed class TargetActionsViewModel
     public bool Compile { get; init; }
     public bool Deploy { get; init; }
     public bool Verify { get; init; }
+    public IReadOnlyList<TargetActionDescriptor> Actions { get; init; } = Array.Empty<TargetActionDescriptor>();
 
     public string ConnectionState { get; init; } = "Unknown";
     public string ConnectionDetail { get; init; } = "";
 
-    public static TargetActionsViewModel From(TargetDescriptor target, TargetRuntimeStatus status) => new()
+    public static TargetActionsViewModel From(TargetDescriptor target, TargetRuntimeStatus status, IReadOnlyList<TargetActionDescriptor> actions) => new()
     {
         Id = target.Id,
         Name = target.DisplayName,
@@ -369,6 +394,7 @@ public sealed class TargetActionsViewModel
         Compile = target.Capabilities.Supports(TargetCapability.Compile),
         Deploy = target.Capabilities.Supports(TargetCapability.DeployProgram) || target.Capabilities.Supports(TargetCapability.DeployHardware),
         Verify = target.Capabilities.Supports(TargetCapability.VerifyDeployment),
+        Actions = actions,
         ConnectionState = status.State,
         ConnectionDetail = status.Detail ?? ""
     };

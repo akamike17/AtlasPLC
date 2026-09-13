@@ -7,7 +7,7 @@ using AtlasSoftPlc.Application.Services;
 namespace AtlasSoftPlc.Web.Controllers;
 
 [Authorize]
-public sealed class TargetsController(ITargetRegistry registry, SqliteStore store, IProgramTargetSelectionRepository selections) : Controller
+public sealed class TargetsController(ITargetRegistry registry, SqliteStore store, IProgramTargetSelectionRepository selections, ITargetInstanceRepository instances) : Controller
 {
     public async Task<IActionResult> Index(CancellationToken ct)
     {
@@ -26,10 +26,22 @@ public sealed class TargetsController(ITargetRegistry registry, SqliteStore stor
 
     [HttpPost]
     [ValidateAntiForgeryToken]
-    public IActionResult SaveConfiguration(string targetId, string endpoint, int port, int timeoutMs)
+    public async Task<IActionResult> SaveConfiguration(string targetId, string endpoint, int port, int timeoutMs, CancellationToken ct)
     {
-        if (string.IsNullOrWhiteSpace(targetId) || string.IsNullOrWhiteSpace(endpoint) || port is < 1 or > 65535 || timeoutMs is < 100 or > 60000)
+        if (string.IsNullOrWhiteSpace(targetId) || registry.Get(targetId) is null || string.IsNullOrWhiteSpace(endpoint) || port is < 1 or > 65535 || timeoutMs is < 100 or > 60000)
             return BadRequest("Endpoint, puerto o timeout inválido.");
+        var descriptor = registry.Get(targetId)!;
+        await instances.SaveAsync(new TargetInstance
+        {
+            Id = targetId,
+            TargetPluginId = descriptor.Id,
+            TargetType = descriptor.Id,
+            DisplayName = descriptor.DisplayName,
+            Configuration = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                ["endpoint"] = endpoint.Trim(), ["port"] = port.ToString(), ["timeoutMs"] = timeoutMs.ToString()
+            }
+        }, ct);
         using var conn = store.OpenConnection();
         using var cmd = conn.CreateCommand();
         cmd.CommandText = "INSERT INTO TargetConfigurations(TargetId,Endpoint,Port,TimeoutMs,UpdatedUtc) VALUES($id,$e,$p,$t,$u) ON CONFLICT(TargetId) DO UPDATE SET Endpoint=$e,Port=$p,TimeoutMs=$t,UpdatedUtc=$u";

@@ -18,4 +18,26 @@ public sealed class GraphLowererTests
         Assert.Single(program.Logic.Rules);
         Assert.Equal("Motor", program.Variables.Single(x => x.Direction == AtlasSoftPlc.Domain.Common.VariableDirection.Output).Key);
     }
+
+    [Fact]
+    public void LowersTonGraphToTimerStartAndDoneRule()
+    {
+        var input = new GraphNode { Kind = GraphNodeKind.Input, Name = "Start" };
+        var ton = new GraphNode { Kind = GraphNodeKind.Ton, Name = "Delay", Properties = new Dictionary<string, string> { ["PresetMs"] = "750" } };
+        var output = new GraphNode { Kind = GraphNodeKind.Output, Name = "Motor" };
+        var graph = new GraphDocument
+        {
+            Nodes = new() { input, ton, output },
+            Edges = new() { new GraphEdge { FromNodeId = input.Id, ToNodeId = ton.Id }, new GraphEdge { FromNodeId = ton.Id, ToNodeId = output.Id } }
+        };
+
+        var validation = new GraphValidator().Validate(graph);
+        var program = new GraphLowerer().Lower(graph, validation);
+
+        Assert.True(validation.IsValid);
+        Assert.Single(program.Logic.TimerIds);
+        Assert.Equal(2, program.Logic.Rules.Count);
+        Assert.Contains(program.Logic.Rules.SelectMany(r => r.Actions), action => action is AtlasSoftPlc.Domain.Logic.StartTimerAction timer && timer.PresetMs == 750);
+        Assert.Contains(program.Logic.Rules, rule => rule.Condition is AtlasSoftPlc.Domain.Logic.TimerStateExpression);
+    }
 }

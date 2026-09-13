@@ -67,6 +67,7 @@ builder.Services.AddSingleton<IGraphDocumentRepository, SqliteGraphDocumentRepos
 builder.Services.AddScoped<IProgramValidationPipeline, ProgramValidationPipeline>();
 builder.Services.AddSingleton<ITargetRegistry, TargetRegistry>();
 builder.Services.AddSingleton<ITargetConfigurationProvider, SqliteTargetConfigurationProvider>();
+TargetPluginCatalog.AddBuiltIns(builder.Services);
 builder.Services.AddScoped<GraphApplicationService>();
 builder.Services.AddSingleton<StructuredTextEmitter>();
 builder.Services.AddSingleton<PlcOpenXmlEmitter>();
@@ -77,8 +78,8 @@ builder.Services.AddSingleton<AtlasRuntimeTargetAdapter>();
 builder.Services.AddSingleton<ModbusOnlineAdapter>();
 builder.Services.AddSingleton<IPlcTargetAdapter>(sp => sp.GetRequiredService<AtlasRuntimeTargetAdapter>());
 builder.Services.AddSingleton<IPlcTargetAdapter>(sp => sp.GetRequiredService<ModbusOnlineAdapter>());
-builder.Services.AddSingleton<ITargetPlugin>(sp => new AdapterTargetPlugin(sp.GetRequiredService<AtlasRuntimeTargetAdapter>()));
-builder.Services.AddSingleton<ITargetPlugin>(sp => new AdapterTargetPlugin(sp.GetRequiredService<ModbusOnlineAdapter>()));
+builder.Services.AddSingleton<ITargetPlugin>(sp => new AdapterTargetPlugin(sp.GetRequiredService<AtlasRuntimeTargetAdapter>(), sp.GetRequiredService<ITargetConfigurationProvider>(), "atlas-simulation"));
+builder.Services.AddSingleton<ITargetPlugin>(sp => new AdapterTargetPlugin(sp.GetRequiredService<ModbusOnlineAdapter>(), sp.GetRequiredService<ITargetConfigurationProvider>(), "modbus-online", probeNetwork: true));
 builder.Services.AddSingleton<ITargetPluginRegistry, TargetPluginRegistry>();
 
 // Antiforgery para APIs JSON (sección de seguridad): token esperado en el header.
@@ -125,6 +126,8 @@ builder.Services.AddSingleton<IAlarmRepository, SqliteAlarmRepository>();
 builder.Services.AddSingleton<IProgramVersionRepository, SqliteProgramVersionRepository>();
 builder.Services.AddSingleton<IPlcProgramRepository, SqlitePlcProgramRepository>();
 builder.Services.AddSingleton<IProgramTargetSelectionRepository, SqliteProgramTargetSelectionRepository>();
+builder.Services.AddSingleton<ITargetInstanceRepository, SqliteTargetInstanceRepository>();
+builder.Services.AddSingleton<IArtifactStore, SqliteArtifactStore>();
 
 // ---- Health checks (readiness/liveness) ----
 builder.Services.AddHealthChecks()

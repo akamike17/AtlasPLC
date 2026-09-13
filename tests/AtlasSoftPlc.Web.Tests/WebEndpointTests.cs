@@ -1,4 +1,5 @@
 using System.Net;
+using System.Text.RegularExpressions;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -124,6 +125,30 @@ public sealed class WebEndpointTests : IClassFixture<AtlasWebFactory>
 
         var resp = await client.GetAsync("/Home/Simulation");
         Assert.Equal(HttpStatusCode.OK, resp.StatusCode);
+    }
+
+    [Fact]
+    public async Task Artifacts_Generate_MuestraEstadoYDiagnosticos()
+    {
+        using var client = NewClient();
+        Assert.True(await LoginAsync(client, AdminUser, TestPassword));
+
+        var dashboard = await client.GetAsync("/Home/Simulation");
+        var html = await dashboard.Content.ReadAsStringAsync();
+        var loadForm = html.IndexOf("/Home/LoadProgram", StringComparison.Ordinal);
+        var catalogHtml = loadForm >= 0 ? html[loadForm..] : html;
+        var match = Regex.Match(catalogHtml, @"name=""id""\s+value=""([0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12})""");
+        Assert.True(match.Success, "El catálogo debe exponer un programa persistido para generar el artefacto.");
+        var programId = match.Groups[1].Value;
+        var path = $"/Artifacts/Generate?id={programId}&kind=StructuredText";
+
+        var generated = await client.GetAsync(path);
+
+        Assert.Equal(HttpStatusCode.OK, generated.StatusCode);
+        var body = await generated.Content.ReadAsStringAsync();
+        Assert.Contains("Artefacto validado", body);
+        Assert.Contains("Diagnósticos", body);
+        Assert.Contains("StructuredText", body);
     }
 
     [Fact]

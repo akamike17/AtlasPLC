@@ -23,4 +23,15 @@ public sealed class GraphValidatorTests
         var graph = new GraphDocument { Nodes = new() { input, output }, Edges = new() { new GraphEdge { FromNodeId = input.Id, ToNodeId = output.Id } } };
         Assert.True(new GraphValidator().Validate(graph).IsValid);
     }
+
+    [Fact]
+    public void RejectsUnsupportedVisualBlockBeforeLowering()
+    {
+        var graph = new GraphDocument { Nodes = new() { new GraphNode { Kind = GraphNodeKind.Compare, Name = "Comparador" } } };
+
+        var report = new GraphValidator().Validate(graph);
+
+        Assert.Contains(report.Diagnostics, x => x.Code == "GRAPH_KIND_UNSUPPORTED");
+        Assert.False(report.IsValid);
+    }
 }

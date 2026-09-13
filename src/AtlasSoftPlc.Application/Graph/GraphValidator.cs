@@ -18,6 +18,8 @@ public sealed class GraphValidator : IGraphValidator
             if (string.IsNullOrWhiteSpace(node.Name)) report.Diagnostics.Add(new(GraphDiagnosticSeverity.Error, "GRAPH_NODE_NAME", "Hay un bloque sin nombre.", "Asigna un nombre único.", node.Id));
             else if (!names.Add(node.Name)) report.Diagnostics.Add(new(GraphDiagnosticSeverity.Error, "GRAPH_DUP_NAME", $"Nombre duplicado: {node.Name}.", "Renombra uno de los bloques.", node.Id));
             if (node.Kind == GraphNodeKind.Ton && (!node.Properties.TryGetValue("PresetMs", out var preset) || !double.TryParse(preset, out var ms) || ms <= 0)) report.Diagnostics.Add(new(GraphDiagnosticSeverity.Error, "GRAPH_TON_PRESET", $"El TON '{node.Name}' no tiene un preset válido.", "Configura un tiempo mayor que cero.", node.Id));
+            if (node.Kind is GraphNodeKind.Tof or GraphNodeKind.Set or GraphNodeKind.Reset or GraphNodeKind.Latch or GraphNodeKind.Unlatch or GraphNodeKind.Compare or GraphNodeKind.Interlock or GraphNodeKind.Constant)
+                report.Diagnostics.Add(new(GraphDiagnosticSeverity.Error, "GRAPH_KIND_UNSUPPORTED", $"El bloque '{node.Name}' usa el tipo '{node.Kind}', que aún no tiene traducción ejecutable.", "Cámbialo por Entrada, AND, OR, NOT, TON, Memoria o Salida.", node.Id));
         }
         foreach (var edge in graph.Edges)
         {

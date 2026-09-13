@@ -95,7 +95,10 @@ public sealed class ReviewController(SimulationService simulation, ProgramVersio
         var program = simulation.Active;
         if (program is null) return NotFound("No hay programa activo.");
         if (request.ProjectId != program.Id) return BadRequest("La confirmación no corresponde al programa activo.");
-        var result = await deployment.DeployAsync(request.TargetFamily, program, request, ct);
+        var targetId = await selections.GetAsync(program.Id, ct);
+        if (string.IsNullOrWhiteSpace(targetId) || targets.Get(targetId) is null)
+            return BadRequest("No hay un target válido seleccionado para el programa activo.");
+        var result = await deployment.DeployAsync(targetId, program, request, ct);
         if (!result.Succeeded) return BadRequest(new { result.State, result.Message });
         TempData["ReviewMessage"] = result.Message;
         return RedirectToAction(nameof(Index));
