@@ -24,12 +24,9 @@ public class HomeController : Controller
     private readonly ModbusIoService _modbus;
     private readonly ITargetRegistry _targets;
     private readonly ProgramVersionService _versions;
-    private readonly IGraphValidator _graphValidator;
-    private readonly IGraphLowerer _graphLowerer;
-    private readonly IProgramValidationPipeline _validationPipeline;
-    private readonly IGraphDocumentRepository _graphDocuments;
+    private readonly GraphApplicationService _graphApplication;
 
-    public HomeController(RuntimeStateStore store, PlcRuntimeService runtime, SimulationService sim, ModbusIoService modbus, ITargetRegistry targets, ProgramVersionService versions, IGraphValidator graphValidator, IGraphLowerer graphLowerer, IProgramValidationPipeline validationPipeline, IGraphDocumentRepository graphDocuments)
+    public HomeController(RuntimeStateStore store, PlcRuntimeService runtime, SimulationService sim, ModbusIoService modbus, ITargetRegistry targets, ProgramVersionService versions, GraphApplicationService graphApplication)
     {
         _store = store;
         _runtime = runtime;
@@ -37,10 +34,7 @@ public class HomeController : Controller
         _modbus = modbus;
         _targets = targets;
         _versions = versions;
-        _graphValidator = graphValidator;
-        _graphLowerer = graphLowerer;
-        _validationPipeline = validationPipeline;
-        _graphDocuments = graphDocuments;
+        _graphApplication = graphApplication;
     }
 
     private void EnsureDemo()
@@ -223,13 +217,8 @@ public class HomeController : Controller
                 if (!ids.TryGetValue(from, out var fromId) || !ids.TryGetValue(to, out var toId)) { TempData["BuilderMessage"] = "Conexión inválida: el nodo origen o destino no existe."; return RedirectToAction(nameof(Simulation)); }
                 graph.Edges.Add(new GraphEdge { FromNodeId = fromId, ToNodeId = toId });
             }
-            var graphReport = _graphValidator.Validate(graph);
-            if (!graphReport.IsValid) { TempData["BuilderMessage"] = "Diseño rechazado: " + string.Join(" ", graphReport.Diagnostics.Select(x => x.Message).Take(3)); return RedirectToAction(nameof(Simulation)); }
-            var candidate = _graphLowerer.Lower(graph, graphReport); candidate.Id = _sim.Active.Id; candidate.Name = _sim.Active.Name;
-            var candidateValidation = _validationPipeline.Validate(candidate.Logic, candidate.Variables.ToDictionary(x => x.Id), ValidationOperation.Simulation);
-            if (!candidateValidation.Allowed) { TempData["BuilderMessage"] = "Diseño rechazado por validación: " + string.Join(" ", candidateValidation.Report.Issues.Select(x => x.Message).Take(3)); return RedirectToAction(nameof(Simulation)); }
-            if (!_sim.RestoreProgramDefinition(JsonSerializer.Serialize(candidate))) { TempData["BuilderMessage"] = "No se pudo aplicar el diseño; el proyecto quedó sin cambios."; return RedirectToAction(nameof(Simulation)); }
-            _graphDocuments.SaveAsync(graph).GetAwaiter().GetResult();
+            var applied = _graphApplication.Apply(graph);
+            if (!applied.Succeeded) { TempData["BuilderMessage"] = applied.Message + " " + string.Join(" ", (applied.ProgramReport?.Issues.Select(x => x.Message) ?? applied.GraphReport.Diagnostics.Select(x => x.Message)).Take(3)); return RedirectToAction(nameof(Simulation)); }
             SaveVersion("Diseño gráfico aplicado al proyecto");
             TempData["BuilderMessage"] = "Diseño gráfico validado y aplicado al simulador en estado seguro.";
         }
