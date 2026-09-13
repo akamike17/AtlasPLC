@@ -8,7 +8,7 @@ using System.Diagnostics;
 namespace AtlasSoftPlc.Web.Controllers;
 
 [Authorize]
-public sealed class LabController(ITargetRegistry targets, PlcProgramService programs, IProgramValidationPipeline pipeline) : Controller
+public sealed class LabController(ITargetRegistry targets, PlcProgramService programs, IProgramValidationPipeline pipeline, IProgramTargetSelectionRepository selections) : Controller
 {
     public async Task<IActionResult> Index(CancellationToken ct)
     {
@@ -26,6 +26,12 @@ public sealed class LabController(ITargetRegistry targets, PlcProgramService pro
     {
         var program = await programs.GetByIdAsync(programId, ct);
         if (program is null) return NotFound();
+        if (string.IsNullOrWhiteSpace(targetId)) targetId = await selections.GetAsync(programId, ct) ?? string.Empty;
+        if (targets.Get(targetId) is null)
+        {
+            TempData["LabResult"] = $"{program.Name}: BLOQUEADO; selecciona un target válido para este programa.";
+            return RedirectToAction(nameof(Index));
+        }
         var validation = pipeline.Validate(program.Logic, program.Variables.ToDictionary(v => v.Id), ValidationOperation.Simulation, new ValidationContext { SafeStates = program.Failsafe });
         if (!validation.Allowed)
         {
