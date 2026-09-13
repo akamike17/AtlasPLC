@@ -71,6 +71,7 @@ builder.Services.AddScoped<GraphApplicationService>();
 builder.Services.AddSingleton<StructuredTextEmitter>();
 builder.Services.AddSingleton<PlcOpenXmlEmitter>();
 builder.Services.AddScoped<ArtifactPipeline>();
+builder.Services.AddScoped<TargetDeploymentWorkflow>();
 // Adapters concretos compuestos por DI; Modbus sólo expone I/O online, no deployment.
 builder.Services.AddSingleton<AtlasRuntimeTargetAdapter>();
 builder.Services.AddSingleton<ModbusOnlineAdapter>();
