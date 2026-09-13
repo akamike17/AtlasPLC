@@ -123,6 +123,7 @@ builder.Services.AddSingleton<IHistorianRepository, SqliteHistorianRepository>()
 builder.Services.AddSingleton<IAlarmRepository, SqliteAlarmRepository>();
 builder.Services.AddSingleton<IProgramVersionRepository, SqliteProgramVersionRepository>();
 builder.Services.AddSingleton<IPlcProgramRepository, SqlitePlcProgramRepository>();
+builder.Services.AddSingleton<IProgramTargetSelectionRepository, SqliteProgramTargetSelectionRepository>();
 
 // ---- Health checks (readiness/liveness) ----
 builder.Services.AddHealthChecks()

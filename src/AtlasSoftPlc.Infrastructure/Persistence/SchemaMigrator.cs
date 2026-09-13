@@ -9,7 +9,7 @@ namespace AtlasSoftPlc.Infrastructure.Persistence;
 /// </summary>
 public static class SchemaMigrator
 {
-    public const int LatestVersion = 6;
+    public const int LatestVersion = 7;
 
     private static readonly (int Version, string Sql)[] Migrations =
     {
@@ -19,6 +19,7 @@ public static class SchemaMigrator
         (4, Migration4),
         (5, Migration5),
         (6, Migration6),
+        (7, Migration7),
     };
 
     public static void Migrate(SqliteStore store)
@@ -188,6 +189,14 @@ CREATE TABLE IF NOT EXISTS ProgramGraphs (
     ProgramId TEXT PRIMARY KEY,
     SchemaVersion INTEGER NOT NULL,
     Json TEXT NOT NULL,
+    UpdatedUtc TEXT NOT NULL
+);
+";
+
+    private const string Migration7 = @"
+CREATE TABLE IF NOT EXISTS ProgramTargetSelections (
+    ProgramId TEXT PRIMARY KEY,
+    TargetId TEXT NOT NULL,
     UpdatedUtc TEXT NOT NULL
 );
 ";

@@ -2,11 +2,12 @@ using AtlasSoftPlc.Targets;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using AtlasSoftPlc.Infrastructure.Persistence;
+using AtlasSoftPlc.Application.Services;
 
 namespace AtlasSoftPlc.Web.Controllers;
 
 [Authorize]
-public sealed class TargetsController(ITargetRegistry registry, SqliteStore store) : Controller
+public sealed class TargetsController(ITargetRegistry registry, SqliteStore store, IProgramTargetSelectionRepository selections) : Controller
 {
     public async Task<IActionResult> Index(CancellationToken ct)
     {
@@ -34,6 +35,16 @@ public sealed class TargetsController(ITargetRegistry registry, SqliteStore stor
         cmd.CommandText = "INSERT INTO TargetConfigurations(TargetId,Endpoint,Port,TimeoutMs,UpdatedUtc) VALUES($id,$e,$p,$t,$u) ON CONFLICT(TargetId) DO UPDATE SET Endpoint=$e,Port=$p,TimeoutMs=$t,UpdatedUtc=$u";
         cmd.Parameters.AddWithValue("$id", targetId); cmd.Parameters.AddWithValue("$e", endpoint.Trim()); cmd.Parameters.AddWithValue("$p", port); cmd.Parameters.AddWithValue("$t", timeoutMs); cmd.Parameters.AddWithValue("$u", DateTimeOffset.UtcNow.ToString("O")); cmd.ExecuteNonQuery();
         TempData["TargetMessage"] = $"Configuración guardada para {targetId}.";
+        return RedirectToAction(nameof(Index));
+    }
+
+    [HttpPost]
+    [ValidateAntiForgeryToken]
+    public IActionResult SelectForProgram(Guid programId, string targetId)
+    {
+        if (programId == Guid.Empty || registry.Get(targetId) is null) return BadRequest("Programa o target inválido.");
+        selections.SaveAsync(programId, targetId).GetAwaiter().GetResult();
+        TempData["TargetMessage"] = $"Target '{targetId}' seleccionado para el programa.";
         return RedirectToAction(nameof(Index));
     }
 }

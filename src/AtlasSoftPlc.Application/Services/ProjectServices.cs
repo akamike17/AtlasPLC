@@ -34,6 +34,12 @@ public interface IGraphDocumentRepository
     Task DeleteAsync(Guid programId, CancellationToken ct = default);
 }
 
+public interface IProgramTargetSelectionRepository
+{
+    Task<string?> GetAsync(Guid programId, CancellationToken ct = default);
+    Task SaveAsync(Guid programId, string targetId, CancellationToken ct = default);
+}
+
 /// <summary>Servicio de proyectos (sección 43). Delgado, sin lógica industrial.</summary>
 public sealed class ProjectService
 {
