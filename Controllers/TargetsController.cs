@@ -12,7 +12,8 @@ public sealed class TargetsController(
     ITargetPluginRegistry registry,
     ITargetInstanceRepository instanceRepository,
     ITargetRuntimeStatusService statusService,
-    IProgramTargetSelectionRepository selections) : Controller
+    IProgramTargetSelectionRepository selections,
+    ITargetWorkflowExecutor workflow) : Controller
 {
     public async Task<IActionResult> Index(CancellationToken ct)
     {
@@ -26,7 +27,7 @@ public sealed class TargetsController(
         {
             var plugin = registry.Get(instance.TargetPluginId);
             var status = await statusService.GetStatusAsync(instance.Id, ct);
-            configured.Add(new ConfiguredTargetViewModel(instance, plugin?.Descriptor, plugin?.ConfigurationSchema ?? Array.Empty<TargetConfigurationField>(), status));
+            configured.Add(new ConfiguredTargetViewModel(instance, plugin?.Descriptor, plugin?.ConfigurationSchema ?? Array.Empty<TargetConfigurationField>(), plugin?.Actions ?? Array.Empty<TargetActionDescriptor>(), status));
         }
 
         return View(new TargetsViewModel(catalog, catalogStatuses, configured));
@@ -78,6 +79,7 @@ public sealed class TargetsController(
         int timeoutMs,
         string? baseUrl,
         bool allowSelfSigned,
+        string? credentialReference,
         CancellationToken ct)
     {
         var instance = await instanceRepository.GetAsync(instanceId, ct);
@@ -86,7 +88,11 @@ public sealed class TargetsController(
         if (plugin is null) return BadRequest("El plugin de la instancia ya no está registrado.");
         if (!TryBuildConfiguration(plugin, endpoint, port, timeoutMs, baseUrl, allowSelfSigned, out var configuration, out var error)) return BadRequest(error);
 
-        await instanceRepository.SaveAsync(instance with { Configuration = configuration }, ct);
+        await instanceRepository.SaveAsync(instance with
+        {
+            Configuration = configuration,
+            CredentialReference = string.IsNullOrWhiteSpace(credentialReference) ? null : credentialReference.Trim()
+        }, ct);
         TempData["TargetMessage"] = $"Configuración guardada para {instance.DisplayName}.";
         return RedirectToAction(nameof(Index));
     }
@@ -111,6 +117,19 @@ public sealed class TargetsController(
         if (instance is null) return NotFound("La instancia no existe.");
         var status = await statusService.GetStatusAsync(instanceId, ct);
         TempData["TargetMessage"] = $"{instance.DisplayName}: {status.State} — {status.Detail}";
+        return RedirectToAction(nameof(Index));
+    }
+
+    [HttpPost]
+    [ValidateAntiForgeryToken]
+    public async Task<IActionResult> ExecuteAction(string instanceId, string actionId, bool confirmed, CancellationToken ct)
+    {
+        if (string.IsNullOrWhiteSpace(instanceId) || string.IsNullOrWhiteSpace(actionId)) return BadRequest("Instancia o acción inválida.");
+        var result = await workflow.ExecuteAsync(instanceId, actionId, new TargetActionRequest(new Dictionary<string, string>
+        {
+            ["confirmed"] = confirmed.ToString(System.Globalization.CultureInfo.InvariantCulture)
+        }), ct);
+        TempData["TargetMessage"] = $"{actionId}: {result.State} — {result.Message}";
         return RedirectToAction(nameof(Index));
     }
 
@@ -173,4 +192,5 @@ public sealed record ConfiguredTargetViewModel(
     TargetInstance Instance,
     TargetDescriptor? Plugin,
     IReadOnlyList<TargetConfigurationField> ConfigurationSchema,
+    IReadOnlyList<TargetActionDescriptor> Actions,
     TargetRuntimeStatus Status);

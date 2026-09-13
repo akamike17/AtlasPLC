@@ -6,7 +6,7 @@ public sealed class OpenPlcStatusProvider(IOpenPlcRuntimeClient client) : ITarge
 {
     public async Task<TargetRuntimeStatus> GetStatusAsync(TargetInstance instance, CancellationToken ct = default)
     {
-        var result = await client.ProbeAsync(instance, ct).ConfigureAwait(false);
+        var result = await client.StatusAsync(instance, ct).ConfigureAwait(false);
         return new TargetRuntimeStatus(result.State, result.Message);
     }
 }
@@ -33,7 +33,7 @@ public sealed class OpenPlcTargetPlugin : ITargetPlugin
         Capabilities = new TargetCapabilities(new[] { TargetCapability.ReadLiveData, TargetCapability.ReadDiagnostics, TargetCapability.StartController, TargetCapability.StopController }),
         ImplementationState = TargetImplementationState.Assisted,
         DeploymentMode = DeploymentMode.Assisted,
-        DocumentationHint = "Configura endpoint/baseUrl, puerto y allowSelfSigned sólo si corresponde."
+        DocumentationHint = "Configura HTTPS (127.0.0.1:8443 por defecto), timeout y allowSelfSigned sólo por instancia; usa CredentialReference para el proveedor externo."
     };
 
     public ITargetStatusProvider StatusProvider { get; }
@@ -41,7 +41,7 @@ public sealed class OpenPlcTargetPlugin : ITargetPlugin
     public IReadOnlyList<TargetConfigurationField> ConfigurationSchema { get; } = new[]
     {
         new TargetConfigurationField("endpoint", "Endpoint / host", "text", true, "127.0.0.1"),
-        new TargetConfigurationField("port", "Puerto HTTP", "number", true, "8080"),
+        new TargetConfigurationField("port", "Puerto HTTPS", "number", true, "8443"),
         new TargetConfigurationField("baseUrl", "Base URL (opcional)", "text"),
         new TargetConfigurationField("timeoutMs", "Timeout ms", "number", true, "3000"),
         new TargetConfigurationField("allowSelfSigned", "Aceptar certificado autofirmado", "checkbox", false, "false")
@@ -49,7 +49,10 @@ public sealed class OpenPlcTargetPlugin : ITargetPlugin
 
     public IReadOnlyList<TargetActionDescriptor> Actions { get; } = new[]
     {
-        new TargetActionDescriptor("connect", "Verificar API", "Consulta version, capabilities y status por HTTP.") { RequiredCapabilities = new[] { TargetCapability.ReadDiagnostics } },
+        new TargetActionDescriptor("connect", "Verificar API", "Consulta version, capabilities y status por HTTPS.") { RequiredCapabilities = new[] { TargetCapability.ReadDiagnostics }, RequiredState = "Any" },
+        new TargetActionDescriptor("login", "Autenticar", "Inicia sesión usando CredentialReference; no guarda el token.") { RequiredState = "Any" },
+        new TargetActionDescriptor("status", "Consultar estado", "Consulta /api/status con Bearer si hay sesión.") { RequiredCapabilities = new[] { TargetCapability.ReadDiagnostics }, RequiredState = "Any" },
+        new TargetActionDescriptor("logs", "Consultar logs", "Consulta /api/runtime-logs con Bearer si hay sesión.") { RequiredCapabilities = new[] { TargetCapability.ReadDiagnostics }, RequiredState = "Any" },
         new TargetActionDescriptor("start", "Arrancar runtime", "Solicita /api/start-plc al runtime OpenPLC.", true) { RequiredCapabilities = new[] { TargetCapability.StartController }, RequiredState = "Connected" },
         new TargetActionDescriptor("stop", "Detener runtime", "Solicita /api/stop-plc al runtime OpenPLC.", true) { RequiredCapabilities = new[] { TargetCapability.StopController }, RequiredState = "Connected" }
     };
@@ -63,6 +66,9 @@ public sealed class OpenPlcTargetPlugin : ITargetPlugin
             var result = actionId.ToLowerInvariant() switch
             {
                 "connect" => await client.ProbeAsync(instance, ct).ConfigureAwait(false),
+                "login" => await client.LoginAsync(instance, ct).ConfigureAwait(false),
+                "status" => await client.StatusAsync(instance, ct).ConfigureAwait(false),
+                "logs" => await client.RuntimeLogsAsync(instance, ct).ConfigureAwait(false),
                 "start" => await client.StartAsync(instance, ct).ConfigureAwait(false),
                 "stop" => await client.StopAsync(instance, ct).ConfigureAwait(false),
                 _ => new OpenPlcProbeResult(false, "Unsupported", $"Acción OpenPLC no soportada: {actionId}.")

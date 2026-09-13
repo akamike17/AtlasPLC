@@ -94,8 +94,67 @@ public sealed class ArtifactPipelineTests
         Assert.NotEmpty(result.Content);
     }
 
+    [Fact]
+    public void TargetArtifactMatrixOnlyAllowsDeclaredFormats()
+    {
+        var iec = new FakePlugin(new TargetDescriptor
+        {
+            Id = "iec-st", DisplayName = "IEC ST", Category = TargetCategory.EngineeringExport,
+            Description = "test", SupportedArtifactKinds = new[] { "StructuredText" },
+            Capabilities = new TargetCapabilities(new[] { TargetCapability.GenerateSource })
+        });
+        var plcopen = new FakePlugin(new TargetDescriptor
+        {
+            Id = "plcopen-xml", DisplayName = "PLCopen XML", Category = TargetCategory.EngineeringExport,
+            Description = "test", SupportedArtifactKinds = new[] { "PlcOpenXml" },
+            Capabilities = new TargetCapabilities(new[] { TargetCapability.GenerateProject })
+        });
+        var modbus = new FakePlugin(new TargetDescriptor
+        {
+            Id = "modbus-online", DisplayName = "Modbus Online", Category = TargetCategory.OnlineIo,
+            Description = "test", Capabilities = new TargetCapabilities(new[] { TargetCapability.ReadLiveData })
+        });
+        var openPlc = new FakePlugin(new TargetDescriptor
+        {
+            Id = "openplc", DisplayName = "OpenPLC", Category = TargetCategory.PlcRuntime,
+            Description = "test", Capabilities = new TargetCapabilities(new[] { TargetCapability.ReadDiagnostics })
+        });
+        var pipeline = new ArtifactPipeline(new FakePipeline(true), new StructuredTextEmitter(), new PlcOpenXmlEmitter(), new TargetPluginRegistry(new ITargetPlugin[] { iec, plcopen, modbus, openPlc }));
+        var program = SimpleBooleanProgram();
+
+        Assert.True(pipeline.Generate(program, Instance("iec-st"), "StructuredText").Succeeded);
+        Assert.False(pipeline.Generate(program, Instance("iec-st"), "PlcOpenXml").Succeeded);
+        Assert.True(pipeline.Generate(program, Instance("plcopen-xml"), "PlcOpenXml").Succeeded);
+        Assert.False(pipeline.Generate(program, Instance("modbus-online"), "StructuredText").Succeeded);
+        Assert.False(pipeline.Generate(program, Instance("openplc"), "StructuredText").Succeeded);
+    }
+
     private static ArtifactPipeline CreateTargetPipeline(ITargetPlugin plugin) =>
         new(new FakePipeline(true), new StructuredTextEmitter(), new PlcOpenXmlEmitter(), new TargetPluginRegistry(new[] { plugin }));
+
+    private static PlcProgramDefinition SimpleBooleanProgram()
+    {
+        var input = new VariableDefinition { Key = "Start", DisplayName = "Start", Direction = VariableDirection.Input, DataType = PlcDataType.Bool };
+        var output = new VariableDefinition { Key = "Motor", DisplayName = "Motor", Direction = VariableDirection.Output, DataType = PlcDataType.Bool };
+        return new PlcProgramDefinition
+        {
+            Name = "Simple matrix program",
+            Variables = new() { input, output },
+            Logic = new LogicProgram
+            {
+                Rules = new()
+                {
+                    new LogicRule
+                    {
+                        Name = "Start motor",
+                        Condition = new VariableExpression { VariableId = input.Id, VariableKey = input.Key },
+                        Actions = new List<LogicAction> { new SetOutputAction { VariableId = output.Id, Value = "true" } },
+                        ElseActions = new List<LogicAction> { new SetOutputAction { VariableId = output.Id, Value = "false" } }
+                    }
+                }
+            }
+        };
+    }
 
     private static TargetInstance Instance(string pluginId) => new() { Id = pluginId + "-local", TargetPluginId = pluginId, DisplayName = pluginId };
 

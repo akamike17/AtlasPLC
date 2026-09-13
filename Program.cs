@@ -70,7 +70,11 @@ builder.Services.AddScoped<IProgramValidationPipeline, ProgramValidationPipeline
 builder.Services.AddSingleton<ITargetRegistry, TargetRegistry>();
 builder.Services.AddSingleton<ITargetConfigurationProvider, SqliteTargetConfigurationProvider>();
 TargetPluginCatalog.AddBuiltIns(builder.Services);
-builder.Services.AddSingleton<IOpenPlcRuntimeClient>(_ => new OpenPlcRuntimeClient());
+builder.Services.AddSingleton<ITargetCredentialProvider, EnvironmentTargetCredentialProvider>();
+builder.Services.AddSingleton<IOpenPlcSessionStore, OpenPlcSessionStore>();
+builder.Services.AddSingleton<IOpenPlcRuntimeClient>(sp => new OpenPlcRuntimeClient(
+    sessions: sp.GetRequiredService<IOpenPlcSessionStore>(),
+    credentials: sp.GetRequiredService<ITargetCredentialProvider>()));
 builder.Services.AddSingleton<ITargetPlugin, OpenPlcTargetPlugin>();
 ToolchainCatalog.AddBuiltIns(builder.Services);
 builder.Services.AddSingleton<IToolchainRegistry, ToolchainRegistry>();

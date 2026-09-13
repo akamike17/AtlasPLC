@@ -37,7 +37,7 @@ public sealed class SqliteTargetInstanceRepository(SqliteStore store) : ITargetI
         cmd.Parameters.AddWithValue("$id", instance.Id);
         cmd.Parameters.AddWithValue("$plugin", instance.TargetPluginId);
         cmd.Parameters.AddWithValue("$name", string.IsNullOrWhiteSpace(instance.DisplayName) ? instance.Id : instance.DisplayName);
-        cmd.Parameters.AddWithValue("$config", JsonSerializer.Serialize(instance.Configuration));
+        cmd.Parameters.AddWithValue("$config", JsonSerializer.Serialize(SanitizeConfiguration(instance.Configuration)));
         cmd.Parameters.AddWithValue("$credential", (object?)instance.CredentialReference ?? DBNull.Value);
         cmd.Parameters.AddWithValue("$utc", DateTimeOffset.UtcNow.ToString("O"));
         await cmd.ExecuteNonQueryAsync(ct);
@@ -55,8 +55,9 @@ public sealed class SqliteTargetInstanceRepository(SqliteStore store) : ITargetI
 
     private static TargetInstance Read(Microsoft.Data.Sqlite.SqliteDataReader reader)
     {
-        var config = JsonSerializer.Deserialize<Dictionary<string, string>>(reader.GetString(3))
+        var stored = JsonSerializer.Deserialize<Dictionary<string, string>>(reader.GetString(3))
             ?? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var config = SanitizeConfiguration(stored);
         var pluginId = reader.GetString(1);
         return new TargetInstance
         {
@@ -64,5 +65,18 @@ public sealed class SqliteTargetInstanceRepository(SqliteStore store) : ITargetI
             DisplayName = reader.GetString(2), Configuration = config,
             CredentialReference = reader.IsDBNull(4) ? null : reader.GetString(4)
         };
+    }
+
+    private static IReadOnlyDictionary<string, string> SanitizeConfiguration(IReadOnlyDictionary<string, string> configuration) =>
+        configuration
+            .Where(pair => !IsSecretKey(pair.Key))
+            .ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.OrdinalIgnoreCase);
+
+    private static bool IsSecretKey(string key)
+    {
+        var normalized = key.Replace("_", string.Empty, StringComparison.Ordinal)
+            .Replace("-", string.Empty, StringComparison.Ordinal)
+            .ToLowerInvariant();
+        return normalized is "password" or "accesstoken" or "token" or "authorization" or "bearer";
     }
 }

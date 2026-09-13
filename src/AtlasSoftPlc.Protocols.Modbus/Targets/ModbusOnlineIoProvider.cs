@@ -30,6 +30,9 @@ public sealed class ModbusOnlineIoProvider : IOnlineIoProvider
     {
         if (addresses is null || addresses.Count == 0)
             return new(false, "InvalidRequest", "Indica al menos una dirección Modbus para leer.");
+        var invalid = addresses.Where(address => ModbusAddress.TryParse(address) is null).ToArray();
+        if (invalid.Length > 0)
+            return new(false, "InvalidAddress", $"Dirección(es) Modbus inválida(s): {string.Join(", ", invalid)}.");
 
         var driver = GetDriver(instance);
         var bindings = ConfigureBindings(driver, addresses, readWrite: "Read");
@@ -38,8 +41,10 @@ public sealed class ModbusOnlineIoProvider : IOnlineIoProvider
 
         var ids = bindings.Keys.ToArray();
         var values = await driver.ReadInputsAsync(ids, ct).ConfigureAwait(false);
+        if (values.Count != bindings.Count)
+            return new(false, "Faulted", $"El dispositivo no respondió todas las direcciones Modbus ({values.Count}/{bindings.Count}).");
         var output = bindings.ToDictionary(pair => pair.Value.Address,
-            pair => values.TryGetValue(pair.Key, out var value) ? value.AsString() : "<sin respuesta>",
+            pair => values[pair.Key].AsString(),
             StringComparer.OrdinalIgnoreCase);
         return new(true, "Read", $"Lectura Modbus completada: {output.Count} dirección(es).", output);
     }
@@ -48,6 +53,9 @@ public sealed class ModbusOnlineIoProvider : IOnlineIoProvider
     {
         if (values is null || values.Count == 0)
             return new(false, "InvalidRequest", "Indica al menos una dirección Modbus y su valor.");
+        var invalid = values.Keys.Where(address => ModbusAddress.TryParse(address) is null).ToArray();
+        if (invalid.Length > 0)
+            return new(false, "InvalidAddress", $"Dirección(es) Modbus inválida(s): {string.Join(", ", invalid)}.");
 
         var driver = GetDriver(instance);
         var bindings = ConfigureBindings(driver, values.Keys, readWrite: "ReadWrite");
@@ -104,14 +112,12 @@ public sealed class ModbusOnlineIoProvider : IOnlineIoProvider
                 DeviceId = Guid.Empty,
                 Protocol = DeviceProtocol.ModbusTcp,
                 Address = a,
-                DataType = IsBitAddress(a) ? "bool" : "uint16",
+                DataType = ModbusAddress.TryParse(a)?.Area is ModbusArea.Coil or ModbusArea.DiscreteInput ? "bool" : "uint16",
                 ReadWriteMode = readWrite
             });
         driver.Configure(bindings.Values.ToArray());
         return bindings;
     }
-
-    private static bool IsBitAddress(string address) => address.TrimStart().StartsWith("0", StringComparison.Ordinal) || address.TrimStart().StartsWith("1", StringComparison.Ordinal);
 
     private static PlcValue ParseValue(string raw, string dataType)
     {

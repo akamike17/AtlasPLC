@@ -39,4 +39,37 @@ public sealed class TargetInstanceRepositoryTests
         await repository.SaveAsync(programId, "siemens-planta-2");
         Assert.Equal("siemens-planta-2", await repository.GetAsync(programId));
     }
+
+    [Fact]
+    public async Task SensitiveConfigurationKeysAreNeverPersisted()
+    {
+        using var db = new TestDb();
+        var repository = new SqliteTargetInstanceRepository(db.Store);
+        await repository.SaveAsync(new TargetInstance
+        {
+            Id = "openplc-local",
+            TargetPluginId = "openplc",
+            DisplayName = "OpenPLC local",
+            CredentialReference = "openplc-local",
+            Configuration = new Dictionary<string, string>
+            {
+                ["endpoint"] = "127.0.0.1",
+                ["password"] = "must-not-reach-sqlite",
+                ["access_token"] = "must-not-reach-sqlite",
+                ["timeoutMs"] = "3000"
+            }
+        });
+
+        var loaded = await repository.GetAsync("openplc-local");
+        Assert.NotNull(loaded);
+        Assert.Equal("openplc-local", loaded!.CredentialReference);
+        Assert.DoesNotContain(loaded.Configuration.Keys, key => key.Contains("password", StringComparison.OrdinalIgnoreCase));
+        Assert.DoesNotContain(loaded.Configuration.Keys, key => key.Contains("token", StringComparison.OrdinalIgnoreCase));
+
+        using var connection = db.Store.OpenConnection();
+        using var command = connection.CreateCommand();
+        command.CommandText = "SELECT ConfigurationJson FROM TargetInstances WHERE Id='openplc-local'";
+        var json = (string)command.ExecuteScalar()!;
+        Assert.DoesNotContain("must-not-reach-sqlite", json, StringComparison.Ordinal);
+    }
 }

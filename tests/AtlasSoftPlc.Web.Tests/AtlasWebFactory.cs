@@ -31,6 +31,7 @@ public sealed class AtlasWebFactory : WebApplicationFactory<Program>
             cfg.AddInMemoryCollection(new Dictionary<string, string?>
             {
                 ["DataDir"] = _dataDir,
+                ["Auth:SeedPassword"] = "AtlasDemo!2026",
             });
         });
         builder.ConfigureServices(services =>

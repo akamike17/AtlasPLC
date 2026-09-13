@@ -2,6 +2,9 @@ using System.Net;
 using System.Text;
 using System.Text.Json;
 using System.Text.RegularExpressions;
+using AtlasSoftPlc.Application.Packages;
+using AtlasSoftPlc.Application.Services;
+using AtlasSoftPlc.Infrastructure.Persistence;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
 
@@ -154,7 +157,7 @@ public sealed class WebEndpointTests : IClassFixture<AtlasWebFactory>
     }
 
     [Fact]
-    public async Task E2E_CreateGraph_SelectIec_GenerateAndToggleRuntime()
+    public async Task E2E_CreateGraph_SelectIec_GenerateDownloadPersistAndExerciseTruthTable()
     {
         using var isolatedFactory = new AtlasWebFactory();
         using var client = isolatedFactory.CreateClient(new WebApplicationFactoryClientOptions { AllowAutoRedirect = false });
@@ -165,16 +168,25 @@ public sealed class WebEndpointTests : IClassFixture<AtlasWebFactory>
         var programMatch = Regex.Match(html, "name=\"programId\" value=\"([0-9a-fA-F-]{36})\"");
         Assert.True(programMatch.Success, "La simulación debe exponer el programa activo.");
         var programId = Guid.Parse(programMatch.Groups[1].Value);
-        var inputId = Guid.NewGuid();
+        var startId = Guid.NewGuid();
+        var guardId = Guid.NewGuid();
+        var andId = Guid.NewGuid();
         var outputId = Guid.NewGuid();
         var graph = JsonSerializer.Serialize(new
         {
             nodes = new[]
             {
-                new { id = inputId.ToString(), name = "StartGraph", kind = "input" },
+                new { id = startId.ToString(), name = "StartGraph", kind = "input" },
+                new { id = guardId.ToString(), name = "GuardGraph", kind = "input" },
+                new { id = andId.ToString(), name = "AndGraph", kind = "and" },
                 new { id = outputId.ToString(), name = "MotorGraph", kind = "output" }
             },
-            edges = new[] { new { from = inputId.ToString(), to = outputId.ToString() } }
+            edges = new[]
+            {
+                new { from = startId.ToString(), to = andId.ToString() },
+                new { from = guardId.ToString(), to = andId.ToString() },
+                new { from = andId.ToString(), to = outputId.ToString() }
+            }
         });
         var apply = await client.PostAsync("/Home/ApplyGraph", new FormUrlEncodedContent(new Dictionary<string, string>
         {
@@ -186,6 +198,19 @@ public sealed class WebEndpointTests : IClassFixture<AtlasWebFactory>
         var applied = await client.GetAsync("/Home/Simulation");
         var appliedHtml = await applied.Content.ReadAsStringAsync();
         Assert.Contains("Diseño gráfico validado y aplicado", System.Net.WebUtility.HtmlDecode(appliedHtml));
+
+        var targets = await client.GetAsync("/Targets");
+        var targetHtml = await targets.Content.ReadAsStringAsync();
+        var secondary = await client.PostAsync("/Targets/CreateInstance", new FormUrlEncodedContent(new Dictionary<string, string>
+        {
+            ["__RequestVerificationToken"] = ExtractAntiforgeryToken(targetHtml),
+            ["targetPluginId"] = "iec-st",
+            ["displayName"] = "iec-st-secondary",
+            ["endpoint"] = "127.0.0.1",
+            ["port"] = "8443",
+            ["timeoutMs"] = "3000"
+        }));
+        Assert.Equal(HttpStatusCode.Redirect, secondary.StatusCode);
 
         var select = await client.PostAsync("/Targets/SelectForProgram", new FormUrlEncodedContent(new Dictionary<string, string>
         {
@@ -199,13 +224,42 @@ public sealed class WebEndpointTests : IClassFixture<AtlasWebFactory>
         var artifactHtml = await artifact.Content.ReadAsStringAsync();
         Assert.Contains("Generated", artifactHtml);
         Assert.Contains("StructuredText", artifactHtml);
+        var downloadMatch = Regex.Match(artifactHtml, @"Artifacts/Download[^""']*([0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12})", RegexOptions.IgnoreCase);
+        Assert.True(downloadMatch.Success, "El artefacto generado debe ofrecer descarga persistida.");
+        var download = await client.GetAsync($"/Artifacts/Download?id={downloadMatch.Groups[1].Value}");
+        Assert.Equal(HttpStatusCode.OK, download.StatusCode);
+        Assert.Contains("PROGRAM", await download.Content.ReadAsStringAsync());
 
-        var inputResponse = await SetInputAsync(client, inputId, true);
-        Assert.Equal(HttpStatusCode.OK, inputResponse.StatusCode);
-        Assert.True(await WaitForOutputAsync(client, outputId, true));
-        inputResponse = await SetInputAsync(client, inputId, false);
-        Assert.Equal(HttpStatusCode.OK, inputResponse.StatusCode);
-        Assert.True(await WaitForOutputAsync(client, outputId, false));
+        var truthTable = new[]
+        {
+            (Start: false, Guard: false, Output: false),
+            (Start: true, Guard: false, Output: false),
+            (Start: false, Guard: true, Output: false),
+            (Start: true, Guard: true, Output: true),
+            (Start: false, Guard: false, Output: false),
+            (Start: true, Guard: true, Output: true)
+        };
+        foreach (var step in truthTable)
+        {
+            Assert.Equal(HttpStatusCode.OK, (await SetInputAsync(client, startId, step.Start)).StatusCode);
+            Assert.Equal(HttpStatusCode.OK, (await SetInputAsync(client, guardId, step.Guard)).StatusCode);
+            Assert.True(await WaitForOutputAsync(client, outputId, step.Output), $"Tabla de verdad falló para Start={step.Start}, Guard={step.Guard}.");
+        }
+
+        using var scope = isolatedFactory.Services.CreateScope();
+        var graphRepository = scope.ServiceProvider.GetRequiredService<IGraphDocumentRepository>();
+        var programRepository = scope.ServiceProvider.GetRequiredService<IPlcProgramRepository>();
+        var versionRepository = scope.ServiceProvider.GetRequiredService<IProgramVersionRepository>();
+        var instanceRepository = scope.ServiceProvider.GetRequiredService<ITargetInstanceRepository>();
+        var selectionRepository = scope.ServiceProvider.GetRequiredService<IProgramTargetSelectionRepository>();
+        var artifactRepository = scope.ServiceProvider.GetRequiredService<IArtifactStore>();
+        Assert.NotNull(await graphRepository.GetAsync(programId));
+        Assert.NotNull(await programRepository.GetByIdAsync(programId));
+        Assert.NotEmpty(await versionRepository.GetByProgramAsync(programId));
+        Assert.NotNull(await instanceRepository.GetAsync("iec-st-local"));
+        Assert.NotNull(await instanceRepository.GetAsync("iec-st-secondary"));
+        Assert.Equal("iec-st-local", await selectionRepository.GetAsync(programId));
+        Assert.Equal("iec-st-local", (await artifactRepository.GetAsync(Guid.Parse(downloadMatch.Groups[1].Value)))!.TargetInstanceId);
     }
 
     [Fact]
@@ -251,6 +305,49 @@ public sealed class WebEndpointTests : IClassFixture<AtlasWebFactory>
         Assert.Contains("Deploy físico permanece deshabilitado", body);
         Assert.Contains("data-target=\"Modbus Online\"", body);
         Assert.Contains("disabled=\"disabled\">Deploy", body);
+    }
+
+    [Fact]
+    public async Task Targets_ExponeConfiguracionOpenPlcYAccionesDelWorkflow()
+    {
+        using var isolatedFactory = new AtlasWebFactory();
+        using var client = isolatedFactory.CreateClient(new WebApplicationFactoryClientOptions { AllowAutoRedirect = false });
+        Assert.True(await LoginAsync(client, AdminUser, TestPassword));
+
+        var targets = await client.GetAsync("/Targets");
+        var body = await targets.Content.ReadAsStringAsync();
+        Assert.Contains("Crear instancia", body);
+        Assert.Contains("CredentialReference", body);
+        Assert.Contains("Puerto", body);
+        Assert.Contains("https://127.0.0.1:8443", body);
+
+        var created = await client.PostAsync("/Targets/CreateInstance", new FormUrlEncodedContent(new Dictionary<string, string>
+        {
+            ["__RequestVerificationToken"] = ExtractAntiforgeryToken(body),
+            ["targetPluginId"] = "openplc",
+            ["displayName"] = "openplc-workflow-test",
+            ["endpoint"] = "127.0.0.1",
+            ["port"] = "8443",
+            ["timeoutMs"] = "3000",
+            ["credentialReference"] = "openplc-local"
+        }));
+        Assert.Equal(HttpStatusCode.Redirect, created.StatusCode);
+
+        var configured = await client.GetAsync("/Targets");
+        var configuredHtml = await configured.Content.ReadAsStringAsync();
+        Assert.Contains("Autenticar", configuredHtml);
+        Assert.Contains("Arrancar runtime", configuredHtml);
+        Assert.Contains("Detener runtime", configuredHtml);
+        var action = await client.PostAsync("/Targets/ExecuteAction", new FormUrlEncodedContent(new Dictionary<string, string>
+        {
+            ["__RequestVerificationToken"] = ExtractAntiforgeryToken(configuredHtml),
+            ["instanceId"] = "openplc-workflow-test",
+            ["actionId"] = "login",
+            ["confirmed"] = "false"
+        }));
+        Assert.Equal(HttpStatusCode.Redirect, action.StatusCode);
+        var result = await client.GetAsync("/Targets");
+        Assert.Contains("No hay credenciales", await result.Content.ReadAsStringAsync());
     }
 
     [Fact]
