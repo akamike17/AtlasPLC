@@ -4,6 +4,7 @@ using System.Globalization;
 using AtlasSoftPlc.Application.Services;
 using AtlasSoftPlc.Application.Graph;
 using AtlasSoftPlc.Application.Validation;
+using AtlasSoftPlc.Application.Packages;
 using AtlasSoftPlc.Domain.Graph;
 using AtlasSoftPlc.Domain.Projects;
 using AtlasSoftPlc.Domain.Runtime;
@@ -25,8 +26,9 @@ public class HomeController : Controller
     private readonly ITargetRegistry _targets;
     private readonly ProgramVersionService _versions;
     private readonly GraphApplicationService _graphApplication;
+    private readonly ArtifactPipeline _artifacts;
 
-    public HomeController(RuntimeStateStore store, PlcRuntimeService runtime, SimulationService sim, ModbusIoService modbus, ITargetRegistry targets, ProgramVersionService versions, GraphApplicationService graphApplication)
+    public HomeController(RuntimeStateStore store, PlcRuntimeService runtime, SimulationService sim, ModbusIoService modbus, ITargetRegistry targets, ProgramVersionService versions, GraphApplicationService graphApplication, ArtifactPipeline artifacts)
     {
         _store = store;
         _runtime = runtime;
@@ -35,6 +37,7 @@ public class HomeController : Controller
         _targets = targets;
         _versions = versions;
         _graphApplication = graphApplication;
+        _artifacts = artifacts;
     }
 
     private void EnsureDemo()
@@ -146,6 +149,18 @@ public class HomeController : Controller
         if (project is null) return NotFound();
         var json = JsonSerializer.Serialize(project, new JsonSerializerOptions { WriteIndented = true });
         return File(System.Text.Encoding.UTF8.GetBytes(json), "application/json", $"atlas-{project.Name.Replace(' ', '-')}.json");
+    }
+
+    [HttpGet]
+    public IActionResult GenerateArtifact(Guid id, string kind = "StructuredText")
+    {
+        EnsureDemo();
+        var project = _sim.Catalog.FirstOrDefault(p => p.Id == id);
+        if (project is null) return NotFound();
+        var artifact = _artifacts.Generate(project, kind);
+        if (!artifact.Succeeded) return BadRequest(new { artifact.Kind, artifact.Diagnostics });
+        var extension = artifact.Kind == "PlcOpenXml" ? "xml" : "st";
+        return File(artifact.Content, artifact.Kind == "PlcOpenXml" ? "application/xml" : "text/plain", $"atlas-{project.Name.Replace(' ', '-')}.{extension}");
     }
 
     [HttpPost]
