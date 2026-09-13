@@ -46,6 +46,16 @@ public static class CanonicalProgramHasher
             sb.Append('\u0001');
         }
 
+        foreach (var component in program.Plant.Components.OrderBy(x => x.Id))
+        {
+            sb.Append("P:").Append(component.Id).Append('/').Append(component.VariableId).Append('/')
+              .Append(component.Name).Append('/').Append(component.RequiresSafeState).Append('/')
+              .Append(component.SafeState?.Value.AsString() ?? "<none>").Append('\u0001');
+            foreach (var requirement in component.Requires.OrderBy(x => x)) sb.Append("R:").Append(requirement).Append(';');
+            foreach (var exclusive in component.MutuallyExclusiveWith.OrderBy(x => x)) sb.Append("X:").Append(exclusive).Append(';');
+            sb.Append('\u0001');
+        }
+
         // 5. Mapa Modbus ordenado por clave (VariableKey).
         foreach (var kv in program.ModbusMap.OrderBy(x => x.Key, StringComparer.Ordinal))
         {

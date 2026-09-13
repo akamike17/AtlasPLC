@@ -2,6 +2,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\AtlasSoftPlc.Domain\AtlasSoftPlc.Domain.csproj" />
+    <ProjectReference Include="..\AtlasSoftPlc.Targets.Abstractions\AtlasSoftPlc.Targets.Abstractions.csproj" />
   </ItemGroup>
 
   <PropertyGroup>

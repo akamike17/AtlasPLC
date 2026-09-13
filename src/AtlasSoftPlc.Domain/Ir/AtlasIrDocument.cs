@@ -42,6 +42,9 @@ public sealed class AtlasIrDocument
     /// <summary>Estados seguros por salida (§39 FASE C SafeState).</summary>
     public List<SafeState> SafeStates { get; init; } = new();
 
+    /// <summary>Restricciones físicas mínimas del proyecto.</summary>
+    public PlantModel Plant { get; init; } = new();
+
     // ── Accesores de conveniencia ──
 
     public IReadOnlyDictionary<Guid, VariableDefinition> VariablesById =>
@@ -71,6 +74,7 @@ public sealed class AtlasIrDocument
         Description = Description,
         Variables = Variables,
         Logic = Logic,
+        Plant = Plant,
         Failsafe = SafeStates.ToDictionary(s => s.VariableId, s => s.Value),
     };
 }

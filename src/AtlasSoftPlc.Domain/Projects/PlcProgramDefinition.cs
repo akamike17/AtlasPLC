@@ -1,4 +1,5 @@
 using AtlasSoftPlc.Domain.Logic;
+using AtlasSoftPlc.Domain.Ir;
 using AtlasSoftPlc.Domain.Values;
 using AtlasSoftPlc.Domain.Variables;
 
@@ -31,6 +32,8 @@ public sealed class PlcProgramDefinition
 
     /// <summary>Failsafe por salida (VariableId → valor).</summary>
     public Dictionary<Guid, PlcValue> Failsafe { get; set; } = new();
+
+    public PlantModel Plant { get; set; } = new();
 
     /// <summary>Mapa Modbus (VariableKey → dirección textual, p.ej. "coil:0").</summary>
     public Dictionary<string, string> ModbusMap { get; set; } = new();

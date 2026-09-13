@@ -24,6 +24,7 @@
     <ProjectReference Include="..\..\src\AtlasSoftPlc.Application\AtlasSoftPlc.Application.csproj" />
     <ProjectReference Include="..\..\src\AtlasSoftPlc.Domain\AtlasSoftPlc.Domain.csproj" />
     <ProjectReference Include="..\..\src\AtlasSoftPlc.Infrastructure\AtlasSoftPlc.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\src\AtlasSoftPlc.Targets.Abstractions\AtlasSoftPlc.Targets.Abstractions.csproj" />
   </ItemGroup>
 
 </Project>
