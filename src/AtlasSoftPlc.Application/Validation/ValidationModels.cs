@@ -84,4 +84,13 @@ public sealed class ValidationContext
     public IReadOnlyDictionary<Guid, VariableDefinition> Variables { get; init; } = new Dictionary<Guid, VariableDefinition>();
     public IReadOnlyCollection<Domain.Devices.DeviceDefinition> Devices { get; init; } = new List<Domain.Devices.DeviceDefinition>();
     public IReadOnlyCollection<Domain.Devices.TagBinding> Bindings { get; init; } = new List<Domain.Devices.TagBinding>();
+
+    /// <summary>
+    /// SafeStates/failsafe por VariableId (P1-1). Da a los validators acceso al safe-state
+    /// real para NO inferir ausencia solo por falta de datos del propio contrato.
+    /// </summary>
+    public IReadOnlyDictionary<Guid, Domain.Values.PlcValue> SafeStates { get; init; } = new Dictionary<Guid, Domain.Values.PlcValue>();
+
+    /// <summary>Interlocks explícitos del documento IR (P1-1).</summary>
+    public IReadOnlyCollection<Domain.Runtime.Interlock> Interlocks { get; init; } = new List<Domain.Runtime.Interlock>();
 }

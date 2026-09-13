@@ -6,7 +6,7 @@ using AtlasSoftPlc.Targets;
 namespace AtlasSoftPlc.Targets.ContractTests;
 
 /// <summary>
-/// Contratos comunes que TODO target adapter debe cumplir (spec §26).
+/// Contratos comunes que TODO target adapter debe cumplir (spec §26 + P0-4).
 /// Estos tests NO dependen de hardware: ejercitan reglas de diseño con fakes.
 /// </summary>
 public class TargetCapabilitiesTests
@@ -75,15 +75,17 @@ public class AtlasRuntimeTargetAdapterTests
         Logic = new Domain.Logic.LogicProgram { Name = "Test" },
     };
 
-    [Fact]
-    public void DeclaresSimulationAndOnlineData_CapabilitiesHonestly()
-    {
-        // No se requiere runtime en vivo para verificar declaración de capacidades.
-        var adapter = new AtlasRuntimeTargetAdapter(new Runtime.Hosting.PlcRuntimeService(
+    private static AtlasRuntimeTargetAdapter NewAdapter() =>
+        new(new Runtime.Hosting.PlcRuntimeService(
             Microsoft.Extensions.Logging.Abstractions.NullLogger<Runtime.Hosting.PlcRuntimeService>.Instance,
             new Runtime.Hosting.RuntimeStateStore(),
             new Runtime.Hosting.WatchdogService(),
             new NullNotifier()));
+
+    [Fact]
+    public void DeclaresSimulationAndOnlineData_CapabilitiesHonestly()
+    {
+        var adapter = NewAdapter();
 
         Assert.True(adapter.Capabilities.Supports(TargetCapability.Simulate));
         Assert.True(adapter.Capabilities.Supports(TargetCapability.ReadLiveData));
@@ -95,16 +97,39 @@ public class AtlasRuntimeTargetAdapterTests
     }
 
     [Fact]
-    public async Task Deploy_WithoutConfirmationToken_Fails()
+    public async Task Simulate_InstallsProject_AndSucceeds()
     {
-        var adapter = new AtlasRuntimeTargetAdapter(new Runtime.Hosting.PlcRuntimeService(
-            Microsoft.Extensions.Logging.Abstractions.NullLogger<Runtime.Hosting.PlcRuntimeService>.Instance,
-            new Runtime.Hosting.RuntimeStateStore(),
-            new Runtime.Hosting.WatchdogService(),
-            new NullNotifier()));
+        var adapter = NewAdapter();
+        var result = await adapter.SimulateAsync(EmptyProject());
+        Assert.True(result.Success);
+    }
 
-        // Aun sin soportar Deploy, la regla de confirmación explícita es universal (base).
-        var result = await adapter.DeployAsync(EmptyProject(), "");
+    [Fact]
+    public async Task Generate_IsUnsupported_WhenNotDeclared()
+    {
+        // P0-4: AtlasRuntime NO declara Generate; GenerateAsync debe ser Unsupported,
+        // no reutilizar SimulateAsync.
+        var adapter = NewAdapter();
+        var result = await adapter.GenerateAsync(EmptyProject());
+        Assert.False(result.Success);
+        Assert.Contains("no soportada", result.Error!, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task Deploy_WithoutCompleteRequest_FailsClosed()
+    {
+        var adapter = NewAdapter();
+        // Deploy no está soportado por AtlasRuntime → Unsupported siempre (fail-closed).
+        var result = await adapter.DeployAsync(EmptyProject(), new DeploymentRequest
+        {
+            TargetManufacturer = "AtlasSoftPlc",
+            TargetFamily = "AtlasRuntime",
+            TargetModel = "Simulation",
+            ProjectId = Guid.NewGuid(),
+            ProjectVersion = 1,
+            ProjectHash = "abc",
+            ConfirmationToken = "token",
+        });
         Assert.False(result.Success);
     }
 
@@ -165,5 +190,122 @@ public class UnsupportedCapabilityExceptionTests
         var ex = new UnsupportedCapabilityException(TargetCapability.DeployProgram);
         Assert.Equal(TargetCapability.DeployProgram, ex.Capability);
         Assert.Contains("DeployProgram", ex.Message);
+    }
+}
+
+/// <summary>
+/// P0-4: un adapter que declara un capability pero NO implementa el override
+/// debe devolver Unsupported (fail-closed), nunca éxito simulado.
+/// </summary>
+public class UnimplementedCapabilityContractTests
+{
+    /// <summary>Adapters de prueba que declaran capabilities sin implementar los overrides.</summary>
+    private sealed class DeclaresGenerateButNoOverrideAdapter : PlcTargetAdapterBase
+    {
+        public DeclaresGenerateButNoOverrideAdapter()
+            : base(new TargetIdentity { Manufacturer = "X", Family = "Y", Model = "Z" },
+                   new[] { TargetCapability.GenerateSource })
+        { }
+    }
+
+    private sealed class DeclaresDeployButNoOverrideAdapter : PlcTargetAdapterBase
+    {
+        public DeclaresDeployButNoOverrideAdapter()
+            : base(new TargetIdentity { Manufacturer = "X", Family = "Y", Model = "Z" },
+                   new[] { TargetCapability.DeployProgram })
+        { }
+    }
+
+    [Fact]
+    public async Task DeclaredGenerate_WithoutOverride_IsUnsupportedNotSuccess()
+    {
+        var adapter = new DeclaresGenerateButNoOverrideAdapter();
+        Assert.True(adapter.Capabilities.Supports(TargetCapability.GenerateSource));
+
+        var result = await adapter.GenerateAsync(new PlcProgramDefinition { Name = "P" });
+        // La declaración NO sustituye la implementación: debe ser Unsupported.
+        Assert.False(result.Success);
+        Assert.Contains("no soportada", result.Error!, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task DeclaredDeploy_WithoutOverride_IsUnsupportedNotSuccess()
+    {
+        var adapter = new DeclaresDeployButNoOverrideAdapter();
+        Assert.True(adapter.Capabilities.Supports(TargetCapability.DeployProgram));
+
+        var result = await adapter.DeployAsync(new PlcProgramDefinition { Name = "P" }, new DeploymentRequest
+        {
+            TargetManufacturer = "X",
+            TargetFamily = "Y",
+            TargetModel = "Z",
+            ProjectId = Guid.NewGuid(),
+            ProjectVersion = 1,
+            ProjectHash = "abc",
+            ConfirmationToken = "token",
+        });
+        Assert.False(result.Success);
+        Assert.Contains("no soportada", result.Error!, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task UndeclaredOperation_IsUnsupported()
+    {
+        // Un adapter que NO declara Simulate debe devolver Unsupported al simular.
+        var adapter = new DeclaresGenerateButNoOverrideAdapter();
+        Assert.False(adapter.Capabilities.Supports(TargetCapability.Simulate));
+        var result = await adapter.SimulateAsync(new PlcProgramDefinition { Name = "P" });
+        Assert.False(result.Success);
+    }
+}
+
+public class DeploymentRequestTests
+{
+    [Fact]
+    public void CompleteRequest_IsComplete()
+    {
+        var req = new DeploymentRequest
+        {
+            TargetManufacturer = "Siemens",
+            TargetFamily = "S7",
+            TargetModel = "1500",
+            ProjectId = Guid.NewGuid(),
+            ProjectVersion = 1,
+            ProjectHash = "abc123",
+            ConfirmationToken = "tok",
+        };
+        Assert.True(req.IsComplete);
+    }
+
+    [Fact]
+    public void EmptyToken_IsIncomplete()
+    {
+        var req = new DeploymentRequest
+        {
+            TargetManufacturer = "Siemens",
+            TargetFamily = "S7",
+            TargetModel = "1500",
+            ProjectId = Guid.NewGuid(),
+            ProjectVersion = 1,
+            ProjectHash = "abc123",
+            ConfirmationToken = "",
+        };
+        Assert.False(req.IsComplete);
+    }
+
+    [Fact]
+    public void EmptyProjectId_IsIncomplete()
+    {
+        var req = new DeploymentRequest
+        {
+            TargetManufacturer = "Siemens",
+            TargetFamily = "S7",
+            TargetModel = "1500",
+            ProjectId = Guid.Empty,
+            ProjectVersion = 1,
+            ProjectHash = "abc123",
+            ConfirmationToken = "tok",
+        };
+        Assert.False(req.IsComplete);
     }
 }

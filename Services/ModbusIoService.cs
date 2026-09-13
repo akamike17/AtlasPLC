@@ -117,10 +117,25 @@ public sealed class ModbusIoService : BackgroundService
             _runtime.SetInputs(inputs);
         }
 
-        // 3. Escribir salidas solo si el runtime está en un estado operable.
-        if (_runtime.GetOutputs() is { Count: > 0 } outputs)
+        // 3. Escribir salidas SOLO si el runtime está operativo (Running) y la
+        // generación/programa no cambiaron desde la captura (anti-stale, P0-1).
+        var ioSnapshot = _runtime.GetIoSnapshot();
+        if (PlcRuntimeService.IsOperationalState(ioSnapshot.State) &&
+            ioSnapshot.Outputs is { Count: > 0 } outputs)
         {
-            await WriteOutputsAsync(driver, outputs, variablesByKey, ct).ConfigureAwait(false);
+            // Re-verificar justo antes de publicar: si el estado/generación/programa
+            // cambió mientras leíamos, descartamos esta escritura (jamás un snapshot viejo).
+            var verify = _runtime.GetIoSnapshot();
+            if (PlcRuntimeService.IsOperationalState(verify.State) &&
+                verify.Generation == ioSnapshot.Generation &&
+                verify.ActiveProgramHash == ioSnapshot.ActiveProgramHash)
+            {
+                await WriteOutputsAsync(driver, outputs, variablesByKey, ct).ConfigureAwait(false);
+            }
+            else
+            {
+                _lastError = "Escritura descartada: el runtime cambió de estado/generación/programa durante el ciclo.";
+            }
         }
 
         var health = await driver.GetHealthAsync(ct).ConfigureAwait(false);

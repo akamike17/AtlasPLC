@@ -1,4 +1,5 @@
 using AtlasSoftPlc.Domain.Logic;
+using AtlasSoftPlc.Domain.Variables;
 
 namespace AtlasSoftPlc.Domain.Runtime;
 
@@ -78,3 +79,15 @@ public sealed class Interlock
     public bool SafeValue { get; set; }
     public OutputPriority Priority { get; set; } = OutputPriority.Interlock;
 }
+
+/// <summary>
+/// Snapshot atómico mínimo para I/O externo (P0-1). Agrupa estado, generación de scan,
+/// hash del programa activo y outputs en UNA sola lectura coherente, de modo que un
+/// bridge (p.ej. Modbus) pueda descartar escrituras obsoletas si estado/generación cambió
+/// entre la captura y la escritura.
+/// </summary>
+public sealed record RuntimeIoSnapshot(
+    RuntimeState State,
+    long Generation,
+    string? ActiveProgramHash,
+    IReadOnlyDictionary<Guid, RuntimeValue> Outputs);

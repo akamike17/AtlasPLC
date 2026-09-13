@@ -13,11 +13,13 @@ namespace AtlasSoftPlc.Runtime.Targets;
 /// existente SIN duplicarlo. El runtime actual es la fuente de verdad de la
 /// simulación; este adapter lo expone como un target más del workbench.
 ///
-/// Capacidades declaradas (honestas):
-///  - Simulate (motor de simulación local)
-///  - ReadLiveData / WriteLiveData (estado online de entradas/salidas)
-///  - Compile/Generate NO: el runtime no genera artefactos de terceros.
-///  - Deploy/Verify NO: no hay PLC físico.
+/// Capacidades declaradas (honestas, P0-4):
+///  - Simulate (motor de simulación local) → implementado vía <see cref="SimulateAsync"/>.
+///  - ReadLiveData / WriteLiveData / ReadSymbols (estado online de entradas/salidas).
+///  - Generate/Compile/Deploy/Verify NO: el runtime no genera ni despliega artefactos.
+///
+/// Regla de contrato: <see cref="GenerateAsync"/> queda Unsupported (no declara
+/// Generate); la simulación se instala SOLO por <see cref="SimulateAsync"/>.
 /// </summary>
 public sealed class AtlasRuntimeTargetAdapter : PlcTargetAdapterBase
 {
@@ -37,10 +39,14 @@ public sealed class AtlasRuntimeTargetAdapter : PlcTargetAdapterBase
         _runtime = runtime ?? throw new ArgumentNullException(nameof(runtime));
     }
 
-    /// <summary>Instala y arranca un proyecto en el runtime de simulación local.</summary>
-    public override Task<TargetOperationResult> GenerateAsync(PlcProgramDefinition project, CancellationToken ct = default)
+    /// <summary>
+    /// Instala y arranca un proyecto en el runtime de simulación local. Esta es la
+    /// implementación de la capacidad <c>Simulate</c> — NO reutiliza Generate.
+    /// </summary>
+    public override Task<TargetOperationResult> SimulateAsync(PlcProgramDefinition project, CancellationToken ct = default)
     {
-        // "Generar" contra el runtime local = instalar configuración y arrancar.
+        ct.ThrowIfCancellationRequested();
+
         var variables = project.Variables.ToDictionary(v => v.Id);
         var failsafe = project.Failsafe ?? new Dictionary<Guid, PlcValue>();
         _runtime.InstallConfiguration(project.Logic, variables, new List<Interlock>(), failsafe);

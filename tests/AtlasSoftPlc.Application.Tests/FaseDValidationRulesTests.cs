@@ -231,4 +231,70 @@ public class FaseDValidationRulesTests
         report.Issues.Add(new ValidationIssue { Severity = ValidationSeverity.Blocker });
         Assert.False(report.IsValid);
     }
+
+    // ── P1-1: separación SafetyCritical vs HasWriter ────────────────────────
+
+    [Fact]
+    public void SafetyCriticalOutput_WithoutWriter_EmitsBothBlockerAndSafeStateWarning()
+    {
+        var motor = Out();
+        motor.SafetyCritical = true;
+        var vars = new Dictionary<Guid, VariableDefinition> { [motor.Id] = motor };
+
+        // Sin escritor: el Blocker de writer NO debe ser excluido por SafetyCritical (P1-1).
+        var issues = Run(new OutputSafeStateValidationRule(), new LogicProgram(), vars);
+        Assert.Contains(issues, i => i.DiagnosticId == "ATLAS-LOGIC-0005" && i.Severity == ValidationSeverity.Blocker);
+        Assert.Contains(issues, i => i.DiagnosticId == "ATLAS-SAFE-0004" && i.Severity == ValidationSeverity.Warning);
+    }
+
+    [Fact]
+    public void SafetyCriticalOutput_WithWriterAndSafeState_NoFalsePositive()
+    {
+        var motor = Out();
+        motor.SafetyCritical = true;
+        var vars = new Dictionary<Guid, VariableDefinition> { [motor.Id] = motor };
+        var program = new LogicProgram
+        {
+            Rules = new List<LogicRule>
+            {
+                new() { Name = "r", Priority = 100, Actions = new List<LogicAction> { new SetOutputAction { VariableId = motor.Id, Value = "true" } } },
+            },
+        };
+        var context = new ValidationContext
+        {
+            Variables = vars,
+            SafeStates = new Dictionary<Guid, AtlasSoftPlc.Domain.Values.PlcValue>
+            {
+                [motor.Id] = AtlasSoftPlc.Domain.Values.PlcValue.Bool(false),
+            },
+        };
+
+        var issues = new OutputSafeStateValidationRule().Validate(program, vars, context).ToList();
+
+        // Tiene escritor (no Blocker) y safe-state presente (no Warning): sin falso positivo.
+        Assert.DoesNotContain(issues, i => i.DiagnosticId == "ATLAS-LOGIC-0005");
+        Assert.DoesNotContain(issues, i => i.DiagnosticId == "ATLAS-SAFE-0004");
+    }
+
+    [Fact]
+    public void SafetyCriticalOutput_WithWriterButNoSafeState_Warns()
+    {
+        var motor = Out();
+        motor.SafetyCritical = true;
+        var vars = new Dictionary<Guid, VariableDefinition> { [motor.Id] = motor };
+        var program = new LogicProgram
+        {
+            Rules = new List<LogicRule>
+            {
+                new() { Name = "r", Priority = 100, Actions = new List<LogicAction> { new SetOutputAction { VariableId = motor.Id, Value = "true" } } },
+            },
+        };
+        var context = new ValidationContext { Variables = vars }; // sin SafeStates
+
+        var issues = new OutputSafeStateValidationRule().Validate(program, vars, context).ToList();
+
+        // Tiene escritor → sin Blocker; sin safe-state → Warning (diagnóstico esperado).
+        Assert.DoesNotContain(issues, i => i.DiagnosticId == "ATLAS-LOGIC-0005");
+        Assert.Contains(issues, i => i.DiagnosticId == "ATLAS-SAFE-0004" && i.Severity == ValidationSeverity.Warning);
+    }
 }

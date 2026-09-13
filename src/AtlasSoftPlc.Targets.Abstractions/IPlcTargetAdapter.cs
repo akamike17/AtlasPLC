@@ -10,8 +10,11 @@ namespace AtlasSoftPlc.Targets;
 ///  - las capacidades se declaran honestamente (nunca se asume una capacidad);
 ///  - una operación no soportada devuelve <see cref="TargetOperationResult.Unsupported"/>
 ///    (o false), NUNCA éxito simulado;
+///  - declarar una capacidad NO sustituye a implementarla: una operación cuyo override
+///    no existe devuelve Unsupported aunque el capability esté declarado;
 ///  - el despliegue jamás ocurre con un Blocker de validación pendiente;
-///  - el despliegue jamás ocurre sin token de confirmación explícito;
+///  - el despliegue jamás ocurre sin un <see cref="DeploymentRequest"/> con confirmación
+///    verificable (atada a target + proyecto + hash);
 ///  - la generación es determinista: misma IR + mismo perfil → mismo hash.
 /// </summary>
 public interface IPlcTargetAdapter
@@ -34,17 +37,66 @@ public interface IPlcTargetAdapter
     /// <summary>Compila el artefacto a través del toolchain del vendor.</summary>
     Task<TargetOperationResult> BuildAsync(PlcProgramDefinition project, CancellationToken ct = default);
 
-    /// <summary>Despliega al target. Requiere confirmación explícita y validación previa.</summary>
-    Task<TargetOperationResult> DeployAsync(PlcProgramDefinition project, string confirmationToken, CancellationToken ct = default);
+    /// <summary>Instala/arranca una simulación local del proyecto (capacidad <c>Simulate</c>).</summary>
+    Task<TargetOperationResult> SimulateAsync(PlcProgramDefinition project, CancellationToken ct = default);
+
+    /// <summary>
+    /// Despliega al target. Requiere un <see cref="DeploymentRequest"/> con token de
+    /// confirmación verificable (atado a target + proyecto + hash) y validación previa.
+    /// </summary>
+    Task<TargetOperationResult> DeployAsync(PlcProgramDefinition project, DeploymentRequest request, CancellationToken ct = default);
 
     /// <summary>Verifica online que el programa esperado quedó cargado.</summary>
     Task<VerifyResult> VerifyAsync(PlcProgramDefinition project, CancellationToken ct = default);
 }
 
 /// <summary>
-/// Implementación base que declara honestamente las capacidades y devuelve
-/// "no soportado" para toda operación no sobreescrita. Los adapters derivan de
-/// esta clase y sobreescriten solo lo que realmente implementan.
+/// Solicitud de despliegue verificable (P0-4). Ata la confirmación del usuario a:
+///  - la identidad del target (marca/familia/modelo);
+///  - el proyecto (id + versión + hash);
+///  - un nonce/expiración razonable para evitar reenvío de un token arbitrario.
+/// </summary>
+public sealed record DeploymentRequest
+{
+    /// <summary>Marca/familia/modelo a la que se debe desplegar (debe coincidir con el target).</summary>
+    public required string TargetManufacturer { get; init; }
+
+    public required string TargetFamily { get; init; }
+
+    public required string TargetModel { get; init; }
+
+    /// <summary>Id del proyecto que se despliega.</summary>
+    public required Guid ProjectId { get; init; }
+
+    /// <summary>Versión del proyecto.</summary>
+    public required int ProjectVersion { get; init; }
+
+    /// <summary>Hash canónico del contenido a desplegar (integridad).</summary>
+    public required string ProjectHash { get; init; }
+
+    /// <summary>Token de confirmación emitido por un flujo válido de confirmación.</summary>
+    public required string ConfirmationToken { get; init; }
+
+    /// <summary>Nonce único del flujo (anti-replay).</summary>
+    public Guid Nonce { get; init; } = Guid.NewGuid();
+
+    /// <summary>Momento en que se emitió (UTC).</summary>
+    public DateTimeOffset IssuedUtc { get; init; } = DateTimeOffset.UtcNow;
+
+    /// <summary>True si la solicitud está completa (no aceptar token vacío/arbitrario).</summary>
+    public bool IsComplete =>
+        !string.IsNullOrWhiteSpace(TargetManufacturer) &&
+        !string.IsNullOrWhiteSpace(TargetFamily) &&
+        !string.IsNullOrWhiteSpace(TargetModel) &&
+        ProjectId != Guid.Empty &&
+        !string.IsNullOrWhiteSpace(ProjectHash) &&
+        !string.IsNullOrWhiteSpace(ConfirmationToken);
+}
+
+/// <summary>
+/// Clase base con "default = unsupported". NO devuelve éxito para ninguna operación:
+/// un adapter que declare un capability pero no implemente el override correspondiente
+/// obtiene Unsupported, no un "éxito" vacío. Declarar capacidad ≠ implementar.
 /// </summary>
 public abstract class PlcTargetAdapterBase : IPlcTargetAdapter
 {
@@ -67,16 +119,16 @@ public abstract class PlcTargetAdapterBase : IPlcTargetAdapter
         SupportLevel = TargetProfile.InferLevel(_capabilities),
     };
 
-    /// <summary>Guarda: requieren que el target declare la capacidad o devuelven "no soportado".</summary>
-    protected TargetOperationResult Require(TargetCapability capability)
-    {
-        if (_capabilities.Supports(capability))
-            return TargetOperationResult.Ok();
-        return TargetOperationResult.Unsupported(capability.ToString());
-    }
+    /// <summary>
+    /// True si el adapter declara la capacidad. La declaración NO sustituye la
+    /// implementación; las operaciones de esta base son Unsupported por defecto.
+    /// </summary>
+    protected bool Supports(TargetCapability capability) => _capabilities.Supports(capability);
 
     public virtual Task<CompatibilityReport> ValidateAsync(PlcProgramDefinition project, CancellationToken ct = default)
     {
+        // Regla: un target que no declara capacidad de generación no puede alojar un
+        // proyecto de ingeniería; bloquea. (Sin capacidad de generación → L1/L2 a lo sumo.)
         if (!_capabilities.Supports(TargetCapability.GenerateSource) &&
             !_capabilities.Supports(TargetCapability.GenerateProject))
         {
@@ -89,30 +141,25 @@ public abstract class PlcTargetAdapterBase : IPlcTargetAdapter
         return Task.FromResult(new CompatibilityReport { Status = CompatibilityReport.CompatibilityStatus.Pass });
     }
 
-    public virtual Task<TargetOperationResult> GenerateAsync(PlcProgramDefinition project, CancellationToken ct = default)
-    {
-        if (!_capabilities.Supports(TargetCapability.GenerateSource) &&
-            !_capabilities.Supports(TargetCapability.GenerateProject))
-            return Task.FromResult(TargetOperationResult.Unsupported("Generate"));
-        return Task.FromResult(TargetOperationResult.Ok());
-    }
+    /// <summary>Default = Unsupported. Un adapter REAL debe sobreescribir esto para generar.</summary>
+    public virtual Task<TargetOperationResult> GenerateAsync(PlcProgramDefinition project, CancellationToken ct = default) =>
+        Task.FromResult(TargetOperationResult.Unsupported($"Generate ({Identity.DisplayName})"));
 
+    /// <summary>Default = Unsupported. Un adapter REAL debe sobreescribir esto para compilar.</summary>
     public virtual Task<TargetOperationResult> BuildAsync(PlcProgramDefinition project, CancellationToken ct = default) =>
-        Task.FromResult(_capabilities.Supports(TargetCapability.Compile)
-            ? TargetOperationResult.Ok()
-            : TargetOperationResult.Unsupported("Build"));
+        Task.FromResult(TargetOperationResult.Unsupported($"Build ({Identity.DisplayName})"));
 
-    public virtual Task<TargetOperationResult> DeployAsync(PlcProgramDefinition project, string confirmationToken, CancellationToken ct = default)
-    {
-        if (string.IsNullOrWhiteSpace(confirmationToken))
-            return Task.FromResult(TargetOperationResult.Fail("Despliegue requiere token de confirmación explícito."));
-        if (!_capabilities.Supports(TargetCapability.DeployProgram))
-            return Task.FromResult(TargetOperationResult.Unsupported("Deploy"));
-        return Task.FromResult(TargetOperationResult.Ok());
-    }
+    /// <summary>Default = Unsupported. Un adapter REAL debe sobreescribir esto para simular.</summary>
+    public virtual Task<TargetOperationResult> SimulateAsync(PlcProgramDefinition project, CancellationToken ct = default) =>
+        Task.FromResult(TargetOperationResult.Unsupported($"Simulate ({Identity.DisplayName})"));
+
+    /// <summary>
+    /// Default = Unsupported. Un adapter REAL debe sobreescribir esto para desplegar,
+    /// validando el <see cref="DeploymentRequest"/> como fail-closed.
+    /// </summary>
+    public virtual Task<TargetOperationResult> DeployAsync(PlcProgramDefinition project, DeploymentRequest request, CancellationToken ct = default) =>
+        Task.FromResult(TargetOperationResult.Unsupported($"Deploy ({Identity.DisplayName})"));
 
     public virtual Task<VerifyResult> VerifyAsync(PlcProgramDefinition project, CancellationToken ct = default) =>
-        Task.FromResult(_capabilities.Supports(TargetCapability.VerifyDeployment)
-            ? VerifyResult.Fail("Verificación no implementada por este adapter.")
-            : VerifyResult.Fail($"El target no soporta verificación online."));
+        Task.FromResult(VerifyResult.Fail($"El target {Identity.DisplayName} no soporta verificación online."));
 }

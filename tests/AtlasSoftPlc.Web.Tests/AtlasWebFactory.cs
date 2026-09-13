@@ -1,6 +1,8 @@
 using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace AtlasSoftPlc.Web.Tests;
 
@@ -30,6 +32,13 @@ public sealed class AtlasWebFactory : WebApplicationFactory<Program>
             {
                 ["DataDir"] = _dataDir,
             });
+        });
+        builder.ConfigureServices(services =>
+        {
+            // La fábrica no debe leer las claves DPAPI del perfil del desarrollador:
+            // pueden pertenecer a otro usuario/contexto y romper cookies/antiforgery.
+            services.AddSingleton<IDataProtectionProvider>(
+                new EphemeralDataProtectionProvider());
         });
     }
 

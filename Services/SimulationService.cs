@@ -82,9 +82,10 @@ public sealed class SimulationService
     }
 
     /// <summary>
-    /// Carga un programa de la biblioteca como activo. Flujo seguro: si hay un programa
-    /// activo se detiene el runtime (estado seguro), se aíslan los tags del anterior y se
-    /// instala el nuevo. Devuelve false si el programa no existe.
+    /// Carga un programa de la biblioteca como activo. Flujo seguro (P0-2): el cambio de
+    /// programa se delega al runtime como UNA operación transaccional (Stop → failsafe del
+    /// saliente → clear forces → install → reset → start), no encadenando comandos asíncronos.
+    /// Devuelve false si el programa no existe.
     /// </summary>
     public bool LoadProgram(Guid id)
     {
@@ -94,22 +95,13 @@ public sealed class SimulationService
             if (program is null)
                 return false;
 
-            // 1. Estado seguro: detener el runtime antes de cambiar de programa.
-            _runtime.Post(new StopCommand());
-
-            // 2. Aislar tags del programa anterior (limpiar estado no compartido).
-            _variables.Clear();
-            _inputValues.Clear();
-            _program = null;
-            _active = null;
-
-            // 3. Instalar variables, lógica y failsafe del nuevo programa.
+            // 1. Actualizar estado local del servicio (catálogo en memoria de la UI).
             _active = program;
+            _variables.Clear();
             foreach (var v in program.Variables)
                 _variables[v.Id] = v;
             _program = program.Logic;
-
-            // Inicializar inputs del nuevo programa a su failsafe (false/apagado).
+            _inputValues.Clear();
             foreach (var v in program.Variables.Where(x => x.Direction == VariableDirection.Input))
                 _inputValues[v.Id] = Runtime(v.Id, false);
 
@@ -121,12 +113,10 @@ public sealed class SimulationService
                 LifecycleState = ProjectLifecycleState.SimulationReady
             };
 
-            InstallToRuntime();
+            // 2. Reemplazo transaccional en el runtime (single-writer, atómico).
+            var replaced = _runtime.ReplaceProgramAsync(program, autoStart: true).GetAwaiter().GetResult();
 
-            // 4. Arrancar el programa instalado.
-            _runtime.Post(new ResumeCommand());
-
-            return true;
+            return replaced;
         }
     }
 
@@ -170,22 +160,7 @@ public sealed class SimulationService
             LifecycleState = ProjectLifecycleState.SimulationReady
         };
 
-        InstallToRuntime();
-        _runtime.Post(new ResumeCommand());
-    }
-
-    private void InstallToRuntime()
-    {
-        if (_program is null) return;
-
-        var failsafe = new Dictionary<Guid, PlcValue>();
-        foreach (var v in _variables.Values.Where(x => x.Direction == VariableDirection.Output))
-            failsafe[v.Id] = _active?.Failsafe.TryGetValue(v.Id, out var fs) == true ? fs : PlcValue.Bool(false);
-
-        var interlocks = new List<Interlock>();
-
-        _runtime.InstallConfiguration(_program, _variables, interlocks, failsafe);
-        _runtime.SetInputs(_inputValues);
+        _runtime.ReplaceProgramAsync(program, autoStart: true).GetAwaiter().GetResult();
     }
 
     private static RuntimeValue Runtime(Guid id, bool value) => new()

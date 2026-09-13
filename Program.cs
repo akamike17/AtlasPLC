@@ -192,7 +192,10 @@ else
     app.UseDeveloperExceptionPage();
 }
 
-app.UseHttpsRedirection();
+// La prueba y el perfil de desarrollo pueden ejecutarse sobre HTTP local; producción
+// mantiene la redirección obligatoria hacia HTTPS.
+if (!app.Environment.IsDevelopment())
+    app.UseHttpsRedirection();
 app.UseStaticFiles();
 app.UseRouting();
 

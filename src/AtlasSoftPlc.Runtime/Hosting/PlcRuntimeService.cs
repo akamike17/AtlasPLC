@@ -2,6 +2,7 @@ using System.Diagnostics;
 using AtlasSoftPlc.Domain.Audit;
 using AtlasSoftPlc.Domain.Common;
 using AtlasSoftPlc.Domain.Logic;
+using AtlasSoftPlc.Domain.Projects;
 using AtlasSoftPlc.Domain.Runtime;
 using AtlasSoftPlc.Domain.Values;
 using AtlasSoftPlc.Domain.Variables;
@@ -74,6 +75,37 @@ public sealed class PlcRuntimeService : BackgroundService
 
     public bool Post(RuntimeCommand command) => _commands.Writer.TryWrite(command);
 
+    /// <summary>
+    /// Reemplazo transaccional de programa (P0-2). Ejecuta la secuencia Stop → failsafe →
+    /// clear forces → install → reset → (auto)start de forma atómica y SINCRÓNICA en el
+    /// hilo llamante, protegida por <c>_coordinator</c> y el token de generación: cualquier
+    /// scan en curso capturó la generación anterior y se descartará al salir del lock. No
+    /// depende de que el loop del <see cref="BackgroundService"/> esté vivo para completar.
+    /// </summary>
+    public bool ReplaceProgram(PlcProgramDefinition program, bool autoStart = true)
+    {
+        ProcessReplaceProgram(program, autoStart);
+        return true;
+    }
+
+    /// <summary>Variante async para callers async (misma operación síncrona, sin bloquear en canal).</summary>
+    public Task<bool> ReplaceProgramAsync(PlcProgramDefinition program, bool autoStart = true, CancellationToken ct = default)
+    {
+        ct.ThrowIfCancellationRequested();
+        ProcessReplaceProgram(program, autoStart);
+        return Task.FromResult(true);
+    }
+
+    /// <summary>Deriva (definitions, interlocks, failsafe) desde un <see cref="PlcProgramDefinition"/>.</summary>
+    private static (IReadOnlyDictionary<Guid, VariableDefinition>, IReadOnlyCollection<Interlock>, IReadOnlyDictionary<Guid, PlcValue>)
+        DeriveConfiguration(PlcProgramDefinition program)
+    {
+        var definitions = program.Variables.ToDictionary(v => v.Id) as IReadOnlyDictionary<Guid, VariableDefinition>;
+        var interlocks = (IReadOnlyCollection<Interlock>)new List<Interlock>();
+        var failsafeValues = new Dictionary<Guid, PlcValue>(program.Failsafe ?? new Dictionary<Guid, PlcValue>());
+        return (definitions, interlocks, failsafeValues);
+    }
+
     /// <summary>Instala la configuración de un programa (validada externamente) de forma atómica.</summary>
     public void InstallConfiguration(
         LogicProgram program,
@@ -124,6 +156,24 @@ public sealed class PlcRuntimeService : BackgroundService
 
     /// <summary>Snapshot inmutable de las entradas actuales del runtime (para la UI).</summary>
     public IReadOnlyDictionary<Guid, RuntimeValue> GetInputs() => _store.Snapshot.Inputs;
+
+    /// <summary>
+    /// Snapshot atómico mínimo para I/O externo (P0-1): estado + generación + hash activo
+    /// + outputs, leídos juntos para que un bridge descarte escrituras obsoletas de
+    /// forma coherente.
+    /// </summary>
+    public RuntimeIoSnapshot GetIoSnapshot()
+    {
+        var snapshot = _store.Snapshot;
+        return new RuntimeIoSnapshot(
+            _state,
+            Interlocked.Read(ref _scanGeneration),
+            _activeProgramHash,
+            snapshot.Outputs);
+    }
+
+    /// <summary>Estados en los que el runtime considera válido publicar outputs calculados.</summary>
+    public static bool IsOperationalState(RuntimeState state) => state == RuntimeState.Running;
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
@@ -342,19 +392,9 @@ public sealed class PlcRuntimeService : BackgroundService
         Outputs = s.Outputs.ToDictionary(k => k.Key, v => v.Value)
     };
 
-    /// <summary>Calcula un hash SHA-256 determinista de la configuración del programa activo.</summary>
+    /// <summary>Calcula un hash SHA-256 determinista de la lógica instalada (P0-3: algoritmo canónico único).</summary>
     private static string ComputeProgramHash(LogicProgram program)
-    {
-        // Hash determinista basado en nombre, versión y reglas (para el MVP, suficiente
-        // para verificar integridad de la configuración instalada).
-        using var sha = System.Security.Cryptography.SHA256.Create();
-        var sb = new System.Text.StringBuilder();
-        sb.Append(program.Name).Append('|').Append(program.Version).Append('|').Append(program.Rules.Count);
-        foreach (var rule in program.Rules.OrderBy(r => r.Id))
-            sb.Append('|').Append(rule.Id).Append(':').Append(rule.Name).Append(':').Append(rule.Priority);
-        var bytes = sha.ComputeHash(System.Text.Encoding.UTF8.GetBytes(sb.ToString()));
-        return Convert.ToHexString(bytes).ToLowerInvariant();
-    }
+        => CanonicalProgramHasher.ComputeLogicHash(program);
 
     private async Task ProcessCommand(RuntimeCommand cmd, CancellationToken ct)
     {
@@ -409,6 +449,66 @@ public sealed class PlcRuntimeService : BackgroundService
             _ = _notifier.NotifyStateChangedAsync(_state);
         }
         await Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// Secuencia transaccional de reemplazo (P0-2), ejecutada en el loop single-writer:
+    ///   1. Stop + increment generation (invalida cualquier scan en curso);
+    ///   2. failsafe DEL programa saliente (con su propia configuración);
+    ///   3. clear forces;
+    ///   4. instalar la nueva configuración;
+    ///   5. reset memory/inputs y publicar snapshot coherente;
+    ///   6. (opcional) Running.
+    /// </summary>
+    private void ProcessReplaceProgram(PlcProgramDefinition program, bool autoStart)
+    {
+        try
+        {
+            // 1. Estado seguro e invalidación de scans tardíos (generación++).
+            TransitionState(RuntimeState.Stopped);
+            _watchdog.Armed = false;
+
+            // 2. Failsafe del programa SALIENTE (su propia configuración).
+            ApplyFailsafeOutputs("program replace (stop)");
+
+            // 3. Limpiar forces del programa saliente (no sobreviven).
+            ClearForces();
+
+            // 4. Instalar la nueva configuración.
+            var (definitions, interlocks, failsafe) = DeriveConfiguration(program);
+            lock (_coordinator)
+            {
+                _activeProgram = program.Logic;
+                _activeProgramHash = ComputeProgramHash(program.Logic);
+                _definitions = definitions;
+                _interlocks = interlocks;
+                _failsafeValues = new Dictionary<Guid, PlcValue>(failsafe);
+                _outputTypes = definitions.Values
+                    .Where(d => d.Direction == VariableDirection.Output)
+                    .ToDictionary(d => d.Id, d => d.DataType);
+                _memory = new Dictionary<Guid, RuntimeValue>();
+                _inputs = new Dictionary<Guid, RuntimeValue>();
+                _forcedOutputs.Clear();
+            }
+
+            // 5. Publicar el failsafe del NUEVO programa (snapshot coherente; los outputs
+            //    del programa saliente NO deben persistir en el snapshot).
+            ApplyFailsafeOutputs("program replace (install)");
+
+            // 6. Arranque opcional.
+            if (autoStart)
+                TransitionState(RuntimeState.Running);
+
+            // 7. Publicar el estado final (Running/Stopped) coherentemente.
+            UpdateMetrics(0);
+
+            Audit(AuditEventType.Force, "Program", program.Id, null, program.Name, "Replaced");
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Fallo al reemplazar programa {Program}", program.Name);
+            throw;
+        }
     }
 
     private async Task ShutdownAsync()

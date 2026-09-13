@@ -163,27 +163,10 @@ public sealed class OutputSafeStateValidationRule : IValidationRule
         IReadOnlyDictionary<Guid, VariableDefinition> variables,
         ValidationContext context)
     {
-        // IDs con SafeState declarado vienen del contexto (failsafe/SafeStates) vía variables no; aquí usamos
-        // una convención: el contexto expone los safe states si el caller los inyecta. Como el contrato
-        // IValidationRule no lleva SafeStates, validamos sobre propiedades de la VariableDefinition.
         foreach (var output in variables.Values.Where(v => v.Direction == VariableDirection.Output))
         {
-            if (output.SafetyCritical)
-            {
-                yield return new ValidationIssue
-                {
-                    DiagnosticId = "ATLAS-SAFE-0004",
-                    Severity = ValidationSeverity.Warning,
-                    Code = Code,
-                    Category = ValidationCategory.Safety,
-                    Message = $"La salida '{output.DisplayName}' está marcada SafetyCritical sin un safe state explícito verificable.",
-                    Why = "Una salida crítica de seguridad debe declarar su estado seguro (spec §6 'salida con safeState no garantizado').",
-                    Evidence = $"VariableId={output.Id}, SafetyCritical=true",
-                    Hint = "Declara un SafeState (failsafe) explícito para esta salida y un interlock de seguridad.",
-                    VariableId = output.Id,
-                };
-            }
-            else if (variables.Values.Count(v => v.Direction == VariableDirection.Output) > 0 && !HasWriter(program, output.Id))
+            // Chequeo independiente 1: sin escritor → Blocker, SIEMPRE (sin importar SafetyCritical).
+            if (!HasWriter(program, output.Id))
             {
                 yield return new ValidationIssue
                 {
@@ -195,6 +178,25 @@ public sealed class OutputSafeStateValidationRule : IValidationRule
                     Why = "Una salida sin escritor queda en un estado indeterminado (spec §5 'salidas sin escritor').",
                     Evidence = $"VariableId={output.Id} sin SetOutputAction",
                     Hint = "Agrega una regla que escriba esta salida, o declárala como Memory si es interna.",
+                    VariableId = output.Id,
+                };
+            }
+
+            // Chequeo independiente 2: salida SafetyCritical sin safe-state real declarado.
+            // Solo advertimos si, según el contexto, el safe-state está AUSENTE (no inferir
+            // ausencia por falta de acceso al contrato; P1-1).
+            if (output.SafetyCritical && !context.SafeStates.ContainsKey(output.Id))
+            {
+                yield return new ValidationIssue
+                {
+                    DiagnosticId = "ATLAS-SAFE-0004",
+                    Severity = ValidationSeverity.Warning,
+                    Code = Code,
+                    Category = ValidationCategory.Safety,
+                    Message = $"La salida '{output.DisplayName}' está marcada SafetyCritical sin un safe state explícito verificable.",
+                    Why = "Una salida crítica de seguridad debe declarar su estado seguro (spec §6 'salida con safeState no garantizado').",
+                    Evidence = $"VariableId={output.Id}, SafetyCritical=true, SafeState ausente",
+                    Hint = "Declara un SafeState (failsafe) explícito para esta salida y un interlock de seguridad.",
                     VariableId = output.Id,
                 };
             }
