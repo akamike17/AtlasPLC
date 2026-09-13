@@ -6,6 +6,8 @@ using AtlasSoftPlc.Application.Graph;
 using AtlasSoftPlc.Domain.Runtime;
 using AtlasSoftPlc.Infrastructure.Persistence;
 using AtlasSoftPlc.Runtime.Hosting;
+using AtlasSoftPlc.Runtime.Targets;
+using AtlasSoftPlc.Protocols.Modbus.Targets;
 using AtlasSoftPlc.Web.Hubs;
 using AtlasSoftPlc.Web.Auth;
 using AtlasSoftPlc.Targets;
@@ -63,6 +65,9 @@ builder.Services.AddSingleton<IGraphDocumentRepository, SqliteGraphDocumentRepos
 builder.Services.AddScoped<IProgramValidationPipeline, ProgramValidationPipeline>();
 builder.Services.AddSingleton<ITargetRegistry, TargetRegistry>();
 builder.Services.AddSingleton<ITargetConfigurationProvider, SqliteTargetConfigurationProvider>();
+// Adapters concretos compuestos por DI; Modbus sólo expone I/O online, no deployment.
+builder.Services.AddSingleton<IPlcTargetAdapter, AtlasRuntimeTargetAdapter>();
+builder.Services.AddSingleton<IPlcTargetAdapter, ModbusOnlineAdapter>();
 
 // Antiforgery para APIs JSON (sección de seguridad): token esperado en el header.
 builder.Services.AddAntiforgery(options =>
