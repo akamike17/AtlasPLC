@@ -27,9 +27,13 @@ public sealed class TargetRegistry(ITargetConfigurationProvider configuration) :
     {
         var descriptor = Get(id); if (descriptor is null) return new("Unsupported", "Target no registrado.");
         var effective = configuration.Get(id);
+        var endpoint = effective?.Endpoint ?? "";
         var port = effective?.Port ?? 0;
         if (port == 0) return new(descriptor.ImplementationState.ToString(), "Requiere configuración.");
-        try { using var tcp = new TcpClient(); await tcp.ConnectAsync("127.0.0.1", port, ct); return new("Detected", $"Servicio accesible en 127.0.0.1:{port}; sólo prueba de disponibilidad."); }
-        catch (Exception ex) when (ex is SocketException or OperationCanceledException) { return new("NotConfigured", $"Servicio no accesible en 127.0.0.1:{port}."); }
+        if (string.IsNullOrWhiteSpace(endpoint)) return new("NotConfigured", "Endpoint vacío; configura el host del target.");
+        using var timeout = CancellationTokenSource.CreateLinkedTokenSource(ct);
+        timeout.CancelAfter(Math.Clamp(effective?.TimeoutMs ?? 1500, 100, 60000));
+        try { using var tcp = new TcpClient(); await tcp.ConnectAsync(endpoint, port, timeout.Token); return new("Detected", $"Servicio accesible en {endpoint}:{port}; sólo prueba de disponibilidad."); }
+        catch (Exception ex) when (ex is SocketException or OperationCanceledException) { return new("NotConfigured", $"Servicio no accesible en {endpoint}:{port} dentro del timeout configurado."); }
     }
 }
