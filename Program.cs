@@ -3,6 +3,8 @@ using AtlasSoftPlc.Application.Logic;
 using AtlasSoftPlc.Application.Services;
 using AtlasSoftPlc.Application.Validation;
 using AtlasSoftPlc.Application.Graph;
+using AtlasSoftPlc.Application.Backends;
+using AtlasSoftPlc.Application.Packages;
 using AtlasSoftPlc.Domain.Runtime;
 using AtlasSoftPlc.Infrastructure.Persistence;
 using AtlasSoftPlc.Runtime.Hosting;
@@ -66,6 +68,9 @@ builder.Services.AddScoped<IProgramValidationPipeline, ProgramValidationPipeline
 builder.Services.AddSingleton<ITargetRegistry, TargetRegistry>();
 builder.Services.AddSingleton<ITargetConfigurationProvider, SqliteTargetConfigurationProvider>();
 builder.Services.AddScoped<GraphApplicationService>();
+builder.Services.AddSingleton<StructuredTextEmitter>();
+builder.Services.AddSingleton<PlcOpenXmlEmitter>();
+builder.Services.AddScoped<ArtifactPipeline>();
 // Adapters concretos compuestos por DI; Modbus sólo expone I/O online, no deployment.
 builder.Services.AddSingleton<AtlasRuntimeTargetAdapter>();
 builder.Services.AddSingleton<ModbusOnlineAdapter>();
