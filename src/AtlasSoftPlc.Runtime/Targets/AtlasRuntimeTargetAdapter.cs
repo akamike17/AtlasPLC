@@ -1,7 +1,6 @@
 using AtlasSoftPlc.Domain.Logic;
 using AtlasSoftPlc.Domain.Projects;
 using AtlasSoftPlc.Domain.Runtime;
-using AtlasSoftPlc.Domain.Values;
 using AtlasSoftPlc.Domain.Variables;
 using AtlasSoftPlc.Runtime.Hosting;
 using AtlasSoftPlc.Targets;
@@ -43,17 +42,34 @@ public sealed class AtlasRuntimeTargetAdapter : PlcTargetAdapterBase
     /// Instala y arranca un proyecto en el runtime de simulación local. Esta es la
     /// implementación de la capacidad <c>Simulate</c> — NO reutiliza Generate.
     /// </summary>
-    public override Task<TargetOperationResult> SimulateAsync(PlcProgramDefinition project, CancellationToken ct = default)
+    public override async Task<TargetOperationResult> SimulateAsync(PlcProgramDefinition project, CancellationToken ct = default)
     {
         ct.ThrowIfCancellationRequested();
-
-        var variables = project.Variables.ToDictionary(v => v.Id);
-        var failsafe = project.Failsafe ?? new Dictionary<Guid, PlcValue>();
-        _runtime.InstallConfiguration(project.Logic, variables, new List<Interlock>(), failsafe);
-        _runtime.Post(new ResumeCommand());
-
-        return Task.FromResult(TargetOperationResult.Ok(detail: "Proyecto instalado en el runtime de simulación local."));
+        try
+        {
+            var replaced = await _runtime.ReplaceProgramAsync(project, autoStart: true, ct).ConfigureAwait(false);
+            return replaced
+                ? TargetOperationResult.Ok(detail: "Proyecto instalado transaccionalmente en el runtime de simulación local.")
+                : TargetOperationResult.Fail("El runtime rechazó el reemplazo del programa.");
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            return TargetOperationResult.Fail($"No se pudo instalar la simulación: {ex.Message}");
+        }
     }
+
+    public override TargetProfile Profile => new()
+    {
+        Identity = Identity, Capabilities = Capabilities,
+        SupportLevel = TargetSupportLevel.L1_Monitor,
+        DefaultConnection = new TargetConnectionProfile
+        {
+            ConnectionType = TargetConnectionType.Simulator,
+            Transport = TargetTransport.Ethernet,
+            Address = "127.0.0.1",
+            Protocol = "AtlasRuntime/Internal"
+        }
+    };
 
     /// <summary>Lee el estado online de las salidas del runtime (snapshot inmutable).</summary>
     public Task<IReadOnlyDictionary<Guid, RuntimeValue>> ReadLiveOutputsAsync() =>

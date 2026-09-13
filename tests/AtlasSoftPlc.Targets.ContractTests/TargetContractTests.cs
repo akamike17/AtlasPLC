@@ -32,6 +32,30 @@ public class TargetCapabilitiesTests
 public class TargetProfileTests
 {
     [Fact]
+    public void PhysicalModbusProfile_UsesExplicitEthernetDefaults()
+    {
+        var profile = new ModbusOnlineAdapter().Profile.DefaultConnection!;
+        Assert.Equal(TargetConnectionType.Physical, profile.ConnectionType);
+        Assert.Equal(TargetTransport.Ethernet, profile.Transport);
+        Assert.Equal("ModbusTcp", profile.Protocol);
+        Assert.Equal(502, profile.Port);
+        Assert.Null(profile.Address);
+        Assert.True(profile.AutoSelectNetworkAdapter);
+    }
+
+    [Fact]
+    public void ModbusSimulatorProfile_UsesLoopbackOnlyExplicitly()
+    {
+        var profile = ModbusConnectionProfiles.Simulator();
+        Assert.Equal(TargetConnectionType.Simulator, profile.ConnectionType);
+        Assert.Equal(TargetTransport.Ethernet, profile.Transport);
+        Assert.Equal("ModbusTcp", profile.Protocol);
+        Assert.Equal("127.0.0.1", profile.Address);
+        Assert.Equal(502, profile.Port);
+        Assert.False(profile.AutoSelectNetworkAdapter);
+    }
+
+    [Fact]
     public void InferLevel_MonitorsAtL1()
     {
         var caps = new TargetCapabilities(new[] { TargetCapability.ReadLiveData });

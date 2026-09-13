@@ -50,6 +50,10 @@ public sealed class ModbusIoService : BackgroundService
     public DeviceHealth? LastHealth => _lastHealth;
     public string? LastError => _lastError;
 
+    public string ConnectionStatus => !_options.Value.Enabled
+        ? "Disabled"
+        : string.IsNullOrWhiteSpace(_options.Value.Host) ? "NeedsConfiguration" : LastHealth?.State.ToString() ?? "Disconnected";
+
     private IReadOnlyDictionary<string, VariableDefinition> ResolveVariablesByKey()
     {
         // Bootstrap del proyecto demo si aún no existe (idempotente a nivel de app:
@@ -92,6 +96,11 @@ public sealed class ModbusIoService : BackgroundService
     {
         var opts = _options.Value;
         if (!opts.Enabled) return;
+        if (string.IsNullOrWhiteSpace(opts.Host))
+        {
+            _lastError = "Modbus habilitado sin Host: requiere un perfil de conexión explícito.";
+            return;
+        }
 
         var variablesByKey = ResolveVariablesByKey();
 

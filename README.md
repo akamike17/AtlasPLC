@@ -12,6 +12,10 @@ tras la activación explícita del modo físico.
 > seguridad). Una señal marcada `SafetyCritical = true` no puede habilitarse
 > silenciosamente y siempre muestra el aviso: *"Esta lógica no sustituye una
 > función de seguridad física/certificada."*
+>
+> `SafetyCritical` solo activa análisis y diagnósticos de ingeniería. No certifica
+> seguridad funcional, SIL o PL, y no sustituye hardware de seguridad, relés de
+> seguridad ni un Safety PLC certificado.
 
 ## Stack
 

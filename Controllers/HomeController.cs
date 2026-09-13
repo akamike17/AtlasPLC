@@ -14,11 +14,13 @@ public class HomeController : Controller
 {
     private readonly RuntimeStateStore _store;
     private readonly SimulationService _sim;
+    private readonly ModbusIoService _modbus;
 
-    public HomeController(RuntimeStateStore store, SimulationService sim)
+    public HomeController(RuntimeStateStore store, SimulationService sim, ModbusIoService modbus)
     {
         _store = store;
         _sim = sim;
+        _modbus = modbus;
     }
 
     private void EnsureDemo()
@@ -86,6 +88,8 @@ public class HomeController : Controller
         Explanation = _sim.Project?.Name ?? "",
         Catalog = _sim.GetLibrary(),
         ActiveProgramId = _sim.Active?.Id
+        ,ModbusStatus = _modbus.ConnectionStatus
+        ,ModbusError = _modbus.LastError
     };
 
     [ResponseCache(Duration = 0, Location = ResponseCacheLocation.None, NoStore = true)]
@@ -107,6 +111,8 @@ public sealed class DashboardViewModel
     public string Explanation { get; set; } = "";
     public IReadOnlyList<PlcProgramDefinition> Catalog { get; set; } = new List<PlcProgramDefinition>();
     public Guid? ActiveProgramId { get; set; }
+    public string ModbusStatus { get; set; } = "Disabled";
+    public string? ModbusError { get; set; }
 }
 
 public sealed class ProgramsViewModel

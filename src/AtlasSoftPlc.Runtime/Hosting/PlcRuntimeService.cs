@@ -29,6 +29,7 @@ public sealed class PlcRuntimeService : BackgroundService
 
     private readonly Stopwatch _monotonic = new();
     private readonly Stopwatch _scanWatch = new();
+    private volatile bool _loopStarted;
 
     private LogicProgram? _activeProgram;
     private string? _activeProgramHash;
@@ -82,18 +83,22 @@ public sealed class PlcRuntimeService : BackgroundService
     /// scan en curso capturó la generación anterior y se descartará al salir del lock. No
     /// depende de que el loop del <see cref="BackgroundService"/> esté vivo para completar.
     /// </summary>
-    public bool ReplaceProgram(PlcProgramDefinition program, bool autoStart = true)
-    {
-        ProcessReplaceProgram(program, autoStart);
-        return true;
-    }
+    public bool ReplaceProgram(PlcProgramDefinition program, bool autoStart = true) =>
+        ReplaceProgramAsync(program, autoStart).GetAwaiter().GetResult();
 
-    /// <summary>Variante async para callers async (misma operación síncrona, sin bloquear en canal).</summary>
-    public Task<bool> ReplaceProgramAsync(PlcProgramDefinition program, bool autoStart = true, CancellationToken ct = default)
+    /// <summary>Encola el reemplazo y espera su confirmación desde el loop single-writer.</summary>
+    public async Task<bool> ReplaceProgramAsync(PlcProgramDefinition program, bool autoStart = true, CancellationToken ct = default)
     {
         ct.ThrowIfCancellationRequested();
-        ProcessReplaceProgram(program, autoStart);
-        return Task.FromResult(true);
+        if (!_loopStarted)
+        {
+            ProcessReplaceProgram(program, autoStart);
+            return true;
+        }
+        var completion = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        if (!_commands.Writer.TryWrite(new ReplaceProgramCommand(program, autoStart, completion)))
+            throw new InvalidOperationException("El loop del runtime no acepta comandos.");
+        return await completion.Task.WaitAsync(ct).ConfigureAwait(false);
     }
 
     /// <summary>Deriva (definitions, interlocks, failsafe) desde un <see cref="PlcProgramDefinition"/>.</summary>
@@ -177,6 +182,7 @@ public sealed class PlcRuntimeService : BackgroundService
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
+        _loopStarted = true;
         _logger.LogInformation("PlcRuntimeService iniciando");
         _monotonic.Start();
         _scanWatch.Start();
@@ -440,6 +446,17 @@ public sealed class PlcRuntimeService : BackgroundService
                 break;
             case SetRuntimeModeCommand mode:
                 _mode = mode.Mode;
+                break;
+            case ReplaceProgramCommand replace:
+                try
+                {
+                    ProcessReplaceProgram(replace.Program, replace.AutoStart);
+                    replace.Completion.TrySetResult(true);
+                }
+                catch (Exception ex)
+                {
+                    replace.Completion.TrySetException(ex);
+                }
                 break;
         }
 

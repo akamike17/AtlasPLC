@@ -49,6 +49,7 @@ public sealed class TargetProfile
     public string EngineeringTool { get; init; } = string.Empty;
     public string[] ExportFormats { get; init; } = Array.Empty<string>();
     public int ProfileVersion { get; init; } = 1;
+    public TargetConnectionProfile? DefaultConnection { get; init; }
 
     /// <summary>Determina el nivel de soporte a partir de las capacidades declaradas.</summary>
     public static TargetSupportLevel InferLevel(TargetCapabilities caps)

@@ -112,11 +112,12 @@ public abstract class PlcTargetAdapterBase : IPlcTargetAdapter
 
     public TargetCapabilities Capabilities => _capabilities;
 
-    public TargetProfile Profile => new()
+    public virtual TargetProfile Profile => new()
     {
         Identity = Identity,
         Capabilities = _capabilities,
         SupportLevel = TargetProfile.InferLevel(_capabilities),
+        DefaultConnection = new TargetConnectionProfile { Protocol = Identity.Family },
     };
 
     /// <summary>

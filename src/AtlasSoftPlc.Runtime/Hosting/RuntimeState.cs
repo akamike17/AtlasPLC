@@ -18,6 +18,10 @@ public sealed record SetManualInputCommand(Guid VariableId, PlcValue Value) : Ru
 public sealed record ForceOutputCommand(Guid VariableId, PlcValue Value, TimeSpan? ExpiresAfter = null) : RuntimeCommand;
 public sealed record ClearForceCommand(Guid VariableId) : RuntimeCommand;
 public sealed record SetRuntimeModeCommand(RuntimeMode Mode) : RuntimeCommand;
+public sealed record ReplaceProgramCommand(
+    AtlasSoftPlc.Domain.Projects.PlcProgramDefinition Program,
+    bool AutoStart,
+    TaskCompletionSource<bool> Completion) : RuntimeCommand;
 
 /// <summary>
 /// Estado observable del runtime. Single-writer: solo el loop de runtime lo muta.

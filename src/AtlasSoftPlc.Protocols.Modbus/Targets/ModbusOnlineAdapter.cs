@@ -30,6 +30,14 @@ public sealed class ModbusOnlineAdapter : PlcTargetAdapterBase
     {
     }
 
+    public override TargetProfile Profile => new()
+    {
+        Identity = Identity,
+        Capabilities = Capabilities,
+        SupportLevel = TargetSupportLevel.L1_Monitor,
+        DefaultConnection = ModbusConnectionProfiles.Physical()
+    };
+
     /// <summary>
     /// Prueba de contrato clave: si el proyecto exige capacidad de generación,
     /// este target queda BLOQUEADO (no puede programar un dispositivo Modbus).

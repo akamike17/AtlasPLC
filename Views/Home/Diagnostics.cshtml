@@ -38,3 +38,11 @@
         </div>
     </div>
 </div>
+
+<div class="card shadow-sm mt-4">
+    <div class="card-header bg-dark text-white">CONEXIÓN MODBUS</div>
+    <div class="card-body">
+        <p><strong>Estado:</strong> @Model.ModbusStatus</p>
+        <p class="mb-0"><strong>Diagnóstico:</strong> @(Model.ModbusError ?? "Sin errores registrados.")</p>
+    </div>
+</div>
