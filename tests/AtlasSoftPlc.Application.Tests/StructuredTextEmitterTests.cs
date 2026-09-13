@@ -9,7 +9,7 @@ namespace AtlasSoftPlc.Application.Tests;
 public sealed class StructuredTextEmitterTests
 {
     [Fact]
-    public void NonLatchedOutputIsAssignedOnBothBranchesAndPreservesElseActions()
+    public void NonLatchedOutputRetainsPreviousValueWithoutElseAndElseActionIsExplicit()
     {
         var start = new VariableDefinition { Key = "Start", DataType = AtlasSoftPlc.Domain.Common.PlcDataType.Bool };
         var stop = new VariableDefinition { Key = "Stop", DataType = AtlasSoftPlc.Domain.Common.PlcDataType.Bool };
@@ -23,8 +23,21 @@ public sealed class StructuredTextEmitterTests
         Assert.Contains("NOT (Stop)", artifact.Source);
         Assert.Contains("Guard", artifact.Source);
         Assert.Contains("Motor := TRUE", artifact.Source);
-        Assert.Contains("Motor := FALSE", artifact.Source);
+        Assert.Contains("retains previous value", artifact.Source);
         Assert.Contains("ELSE Motor := TRUE", artifact.Source);
+    }
+
+    [Fact]
+    public void SimultaneousWritersAreRejectedButMutuallyExclusiveWritersAreAllowed()
+    {
+        var input = new VariableDefinition { Key = "Input", DataType = AtlasSoftPlc.Domain.Common.PlcDataType.Bool };
+        var output = new VariableDefinition { Key = "Output", DataType = AtlasSoftPlc.Domain.Common.PlcDataType.Bool };
+        LogicRule Rule(ExpressionNode condition, string value) => new() { Condition = condition, Actions = new() { new SetOutputAction { VariableId = output.Id, Value = value } } };
+        var concurrent = new StructuredTextEmitter().Emit(new PlcProgramDefinition { Variables = new() { input, output }, Logic = new LogicProgram { Rules = new() { Rule(new ConstantExpression { Value = "true" }, "true"), Rule(new ConstantExpression { Value = "true" }, "false") } } });
+        Assert.False(concurrent.IsSupported);
+        Assert.Contains(concurrent.Diagnostics, d => d.DiagnosticId == "ATLAS-ST-0004");
+        var exclusive = new StructuredTextEmitter().Emit(new PlcProgramDefinition { Variables = new() { input, output }, Logic = new LogicProgram { Rules = new() { Rule(new VariableExpression { VariableId = input.Id }, "true"), Rule(new NotExpression { Operand = new VariableExpression { VariableId = input.Id } }, "false") } } });
+        Assert.True(exclusive.IsSupported);
     }
     [Fact]
     public void SameProgramProducesIdenticalSourceAndHash()

@@ -29,7 +29,16 @@ public sealed class StructuredTextEmitter
         lines.Add("END_VAR");
         var map = new List<SourceMapEntry>();
         var diagnostics = new List<EmitterDiagnostic>();
-        foreach (var rule in program.Logic.Rules.Where(r => r.Enabled).OrderByDescending(r => r.Priority).ThenBy(r => r.Id))
+        var enabledRules = program.Logic.Rules.Where(r => r.Enabled).ToList();
+        foreach (var group in enabledRules.SelectMany(r => r.Actions.OfType<SetOutputAction>().Select(a => (Rule: r, Action: a))).GroupBy(x => x.Action.VariableId))
+        {
+            var writers = group.ToList();
+            for (var i = 0; i < writers.Count; i++)
+                for (var j = i + 1; j < writers.Count; j++)
+                    if (!MutuallyExclusive(writers[i].Rule.Condition, writers[j].Rule.Condition))
+                        diagnostics.Add(new("ATLAS-ST-0004", $"La salida {group.Key} tiene escritores que pueden competir en el mismo scan; no se puede preservar el arbitraje en ST.", group.Key));
+        }
+        foreach (var rule in enabledRules.OrderBy(r => r.Id))
         {
             var allActions = rule.Actions.Concat(rule.ElseActions).ToList();
             foreach (var action in allActions)
@@ -54,8 +63,10 @@ public sealed class StructuredTextEmitter
                 var falseAction = rule.ElseActions.OfType<LogicAction>().FirstOrDefault(a => SameTarget(a, target));
                 if (trueAction is null) continue;
                 var trueValue = ActionValue(trueAction);
-                var falseValue = falseAction is null ? "FALSE" : ActionValue(falseAction);
-                lines.Add($"    IF {expression} THEN {Identifier(variable.Key)} := {trueValue}; ELSE {Identifier(variable.Key)} := {falseValue}; END_IF;");
+                var branch = falseAction is null
+                    ? $"IF {expression} THEN {Identifier(variable.Key)} := {trueValue}; END_IF; (* retains previous value when FALSE *)"
+                    : $"IF {expression} THEN {Identifier(variable.Key)} := {trueValue}; ELSE {Identifier(variable.Key)} := {ActionValue(falseAction)}; END_IF;";
+                lines.Add($"    {branch}");
                 map.Add(new(rule.Id, lines.Count));
             }
         }
@@ -77,6 +88,48 @@ public sealed class StructuredTextEmitter
         SetMemoryAction m => BoolLiteral(m.Value),
         _ => throw new InvalidOperationException("Unsupported action")
     };
+
+    private sealed record Term(IReadOnlyDictionary<Guid, bool> Values);
+
+    private static bool MutuallyExclusive(ExpressionNode? left, ExpressionNode? right)
+    {
+        var a = ToDnf(left);
+        var b = ToDnf(right);
+        return a is not null && b is not null && a.All(x => b.All(y => x.Values.Any(p => y.Values.TryGetValue(p.Key, out var value) && value != p.Value)));
+    }
+
+    private static List<Term>? ToDnf(ExpressionNode? node)
+    {
+        if (node is null) return new() { new(new Dictionary<Guid, bool>()) };
+        if (node is ConstantExpression c) return bool.TryParse(c.Value, out var value) ? value ? new() { new(new Dictionary<Guid, bool>()) } : new() : null;
+        if (node is VariableExpression v) return new() { new(new Dictionary<Guid, bool> { [v.VariableId] = true }) };
+        if (node is NotExpression n && n.Operand is VariableExpression nv) return new() { new(new Dictionary<Guid, bool> { [nv.VariableId] = false }) };
+        if (node is NotExpression) return null;
+        if (node is OrExpression o)
+        {
+            var result = new List<Term>();
+            foreach (var operand in o.Operands) { var terms = ToDnf(operand); if (terms is null) return null; result.AddRange(terms); }
+            return result;
+        }
+        if (node is AndExpression a)
+        {
+            var result = new List<Term> { new(new Dictionary<Guid, bool>()) };
+            foreach (var operand in a.Operands)
+            {
+                var terms = ToDnf(operand); if (terms is null) return null;
+                var next = new List<Term>();
+                foreach (var x in result) foreach (var y in terms)
+                {
+                    var values = new Dictionary<Guid, bool>(x.Values); var compatible = true;
+                    foreach (var pair in y.Values) { if (values.TryGetValue(pair.Key, out var old) && old != pair.Value) { compatible = false; break; } values[pair.Key] = pair.Value; }
+                    if (compatible) next.Add(new(values));
+                }
+                result = next;
+            }
+            return result;
+        }
+        return null;
+    }
 
     private static string? Expression(ExpressionNode? node, IReadOnlyCollection<VariableDefinition> variables, List<EmitterDiagnostic> diagnostics, Guid elementId)
     {
