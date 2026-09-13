@@ -65,7 +65,7 @@ builder.Services.AddSingleton<IGraphDocumentRepository, SqliteGraphDocumentRepos
 builder.Services.AddScoped<IProgramValidationPipeline, ProgramValidationPipeline>();
 builder.Services.AddSingleton<ITargetRegistry, TargetRegistry>();
 builder.Services.AddSingleton<ITargetConfigurationProvider, SqliteTargetConfigurationProvider>();
-builder.Services.AddSingleton<GraphApplicationService>();
+builder.Services.AddScoped<GraphApplicationService>();
 // Adapters concretos compuestos por DI; Modbus sólo expone I/O online, no deployment.
 builder.Services.AddSingleton<IPlcTargetAdapter, AtlasRuntimeTargetAdapter>();
 builder.Services.AddSingleton<IPlcTargetAdapter, ModbusOnlineAdapter>();
