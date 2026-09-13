@@ -200,7 +200,13 @@ public sealed class WatchdogService : IDisposable
         (DateTime.UtcNow.Ticks - Interlocked.Read(ref _lastHeartbeatTicks)) <= _timeoutTicks;
 
     /// <summary>Arranca el timer de vigilancia independiente.</summary>
-    public void Start() => RestartTimer();
+    public void Start()
+    {
+        // El armado comienza un episodio nuevo: evita que el primer tick del timer
+        // interprete la ausencia de un primer scan como un timeout ya vencido.
+        Interlocked.CompareExchange(ref _lastHeartbeatTicks, DateTime.UtcNow.Ticks, 0);
+        RestartTimer();
+    }
 
     private void RestartTimer()
     {
