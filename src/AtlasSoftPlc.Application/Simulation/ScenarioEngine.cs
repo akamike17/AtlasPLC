@@ -35,18 +35,21 @@ public sealed class ScenarioRunner
 {
     public ScenarioRunResult Run(ScenarioDefinition scenario, Func<IReadOnlyDictionary<string, bool>, IReadOnlyDictionary<string, bool>> evaluate, ISimulationClock clock)
     {
+        if (scenario.Duration < TimeSpan.Zero) throw new ArgumentOutOfRangeException(nameof(scenario.Duration));
+        if (scenario.Inputs.Any(x => x.At < TimeSpan.Zero || x.At > scenario.Duration) || scenario.Assertions.Any(x => x.At < TimeSpan.Zero || x.At > scenario.Duration))
+            throw new ArgumentOutOfRangeException(nameof(scenario), "Los eventos y assertions deben estar dentro de la duración del escenario.");
         var result = new ScenarioRunResult();
         var inputs = new Dictionary<string, bool>(StringComparer.Ordinal);
         var elapsed = TimeSpan.Zero;
-        foreach (var input in scenario.Inputs.OrderBy(x => x.At))
+        var points = scenario.Inputs.Select(x => x.At).Concat(scenario.Assertions.Select(x => x.At)).Append(scenario.Duration).Distinct().OrderBy(x => x);
+        foreach (var point in points)
         {
-            if (input.At < elapsed) throw new InvalidOperationException("Los eventos del escenario deben estar ordenados en tiempo no decreciente.");
-            clock.Advance(input.At - elapsed);
-            elapsed = input.At;
-            inputs[input.Name] = input.Value;
+            clock.Advance(point - elapsed);
+            elapsed = point;
+            foreach (var input in scenario.Inputs.Where(x => x.At == point)) inputs[input.Name] = input.Value;
             var outputs = new Dictionary<string, bool>(evaluate(inputs), StringComparer.Ordinal);
-            result.Trace.Add(new ScenarioTraceEntry(input.At, outputs));
-            foreach (var assertion in scenario.Assertions.Where(a => a.At == input.At) .Where(a => !a.Check(outputs)))
+            result.Trace.Add(new ScenarioTraceEntry(point, outputs));
+            foreach (var assertion in scenario.Assertions.Where(a => a.At == point).Where(a => !a.Check(outputs)))
                 result.Failures.Add(assertion.Description);
         }
         result.Passed = result.Failures.Count == 0;

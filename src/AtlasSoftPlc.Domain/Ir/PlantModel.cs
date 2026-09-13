@@ -15,6 +15,8 @@ public sealed class PlantComponent
     public bool RequiresSafeState { get; init; } = true;
     public bool RequiresPhysicalPermission { get; init; }
     public List<Guid> Requires { get; init; } = new();
+    /// <summary>Binding requisito → variable lógica que debe estar activo.</summary>
+    public Dictionary<Guid, Guid> RequirementBindings { get; init; } = new();
     public List<Guid> MutuallyExclusiveWith { get; init; } = new();
     public SafeState? SafeState { get; init; }
 }

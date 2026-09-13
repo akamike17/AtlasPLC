@@ -53,6 +53,7 @@ public static class CanonicalProgramHasher
               .Append(component.SafeState?.Value.AsString() ?? "<none>").Append('\u0001');
             foreach (var requirement in component.Requires.OrderBy(x => x)) sb.Append("R:").Append(requirement).Append(';');
             foreach (var exclusive in component.MutuallyExclusiveWith.OrderBy(x => x)) sb.Append("X:").Append(exclusive).Append(';');
+            foreach (var binding in component.RequirementBindings.OrderBy(x => x.Key)) sb.Append("B:").Append(binding.Key).Append('=').Append(binding.Value).Append(';');
             sb.Append('\u0001');
         }
 
