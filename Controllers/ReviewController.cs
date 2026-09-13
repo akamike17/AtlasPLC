@@ -8,7 +8,7 @@ using System.Text.Json;
 namespace AtlasSoftPlc.Web.Controllers;
 
 [Authorize]
-public sealed class ReviewController(SimulationService simulation, ValidationService validator, ProgramVersionService versions) : Controller
+public sealed class ReviewController(SimulationService simulation, ProgramVersionService versions, IProgramValidationPipeline pipeline) : Controller
 {
     public IActionResult Index()
     {
@@ -16,7 +16,7 @@ public sealed class ReviewController(SimulationService simulation, ValidationSer
         var program = simulation.Active;
         if (program is null) return RedirectToAction("Simulation", "Home");
         var variables = program.Variables.ToDictionary(v => v.Id);
-        var report = validator.Validate(program.Logic, variables, new ValidationContext { Variables = variables, SafeStates = program.Failsafe });
+        var report = pipeline.Validate(program.Logic, variables, ValidationOperation.Generate, new ValidationContext { Variables = variables, SafeStates = program.Failsafe }).Report;
         var history = versions.GetByProgramAsync(program.Id).GetAwaiter().GetResult();
         if (history.Count == 0)
         {
@@ -69,8 +69,8 @@ public sealed class ReviewController(SimulationService simulation, ValidationSer
         var program = simulation.Active;
         if (program is null) return RedirectToAction("Simulation", "Home");
         var variables = program.Variables.ToDictionary(v => v.Id);
-        var report = validator.Validate(program.Logic, variables, new ValidationContext { Variables = variables, SafeStates = program.Failsafe });
-        if (report.Issues.Count > 0)
+        var result = pipeline.Validate(program.Logic, variables, ValidationOperation.Deploy, new ValidationContext { Variables = variables, SafeStates = program.Failsafe });
+        if (!result.Allowed)
         {
             TempData["ReviewMessage"] = "Envío detenido: corrige todos los hallazgos antes de continuar.";
             return RedirectToAction(nameof(Index));
