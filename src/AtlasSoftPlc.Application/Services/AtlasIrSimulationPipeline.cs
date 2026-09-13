@@ -16,15 +16,22 @@ public sealed class AtlasIrSimulationResult
 /// <summary>Ruta canónica IR: validate → lower → adapter simulation.</summary>
 public sealed class AtlasIrSimulationPipeline
 {
-    private readonly IReadOnlyList<IValidationRule> _rules;
+    private readonly IReadOnlyList<IValidationRule> _rules = Array.Empty<IValidationRule>();
+    private readonly IProgramValidationPipeline? _pipeline;
     public AtlasIrSimulationPipeline(IEnumerable<IValidationRule> rules) => _rules = rules.ToList();
+    public AtlasIrSimulationPipeline(IProgramValidationPipeline pipeline) => _pipeline = pipeline;
 
     public async Task<AtlasIrSimulationResult> SimulateAsync(AtlasIrDocument ir, IPlcTargetAdapter target, CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(ir);
         ArgumentNullException.ThrowIfNull(target);
         var variables = ir.Variables.ToDictionary(v => v.Id);
-        var report = new ValidationService(_rules).Validate(ir.Logic, variables, new ValidationContext
+        var report = (_pipeline?.Validate(ir.Logic, variables, ValidationOperation.Simulation, new ValidationContext
+        {
+            Variables = variables,
+            SafeStates = ir.SafeStates.ToDictionary(s => s.VariableId, s => s.Value),
+            Interlocks = ir.Interlocks
+        }).Report) ?? new ValidationService(_rules).Validate(ir.Logic, variables, new ValidationContext
         {
             Variables = variables,
             SafeStates = ir.SafeStates.ToDictionary(s => s.VariableId, s => s.Value),
