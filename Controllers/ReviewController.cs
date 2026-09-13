@@ -9,7 +9,7 @@ using System.Text.Json;
 namespace AtlasSoftPlc.Web.Controllers;
 
 [Authorize]
-public sealed class ReviewController(SimulationService simulation, ProgramVersionService versions, IProgramValidationPipeline pipeline, IProgramTargetSelectionRepository selections, ITargetRegistry targets) : Controller
+public sealed class ReviewController(SimulationService simulation, ProgramVersionService versions, IProgramValidationPipeline pipeline, IProgramTargetSelectionRepository selections, ITargetRegistry targets, TargetDeploymentWorkflow deployment) : Controller
 {
     public IActionResult Index()
     {
@@ -84,6 +84,21 @@ public sealed class ReviewController(SimulationService simulation, ProgramVersio
         }
         TempData["ReviewMessage"] = $"Proyecto '{program.Name}' validado. Regresando al simulador para observar la ejecución.";
         return RedirectToAction("Simulation", "Home");
+    }
+
+    [HttpPost]
+    [ValidateAntiForgeryToken]
+    [Microsoft.AspNetCore.Authorization.Authorize(Roles = "Administrator")]
+    public async Task<IActionResult> Deploy(DeploymentRequest request, CancellationToken ct)
+    {
+        simulation.EnsureLibrary();
+        var program = simulation.Active;
+        if (program is null) return NotFound("No hay programa activo.");
+        if (request.ProjectId != program.Id) return BadRequest("La confirmación no corresponde al programa activo.");
+        var result = await deployment.DeployAsync(request.TargetFamily, program, request, ct);
+        if (!result.Succeeded) return BadRequest(new { result.State, result.Message });
+        TempData["ReviewMessage"] = result.Message;
+        return RedirectToAction(nameof(Index));
     }
 }
 
