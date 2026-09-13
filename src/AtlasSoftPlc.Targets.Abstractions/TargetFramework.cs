@@ -1,5 +1,3 @@
-using System.Net.Sockets;
-
 namespace AtlasSoftPlc.Targets;
 
 public enum TargetCategory { InternalSimulation, ExternalSimulation, PlcRuntime, PhysicalPlc, EngineeringExport, OnlineIo, DiagnosticOnly, Gateway, FutureExtension }
@@ -31,7 +29,8 @@ public interface ITargetRegistry
     Task<TargetRuntimeStatus> GetStatusAsync(string id, CancellationToken ct = default);
 }
 
-public sealed class TargetRegistry : ITargetRegistry
+#if false // Moved to TargetRegistry.cs; retained only as migration reference.
+public sealed class ObsoleteTargetRegistry : ITargetRegistry
 {
     private readonly IReadOnlyList<TargetDescriptor> _targets = CreateTargets();
     public IReadOnlyList<TargetDescriptor> GetAll() => _targets;
@@ -137,3 +136,4 @@ public sealed class TargetRegistry : ITargetRegistry
         new TargetDescriptor { Id="external-simulator", DisplayName="External Simulator", Category=TargetCategory.ExternalSimulation, Description="Simulador externo configurable; sin adapter instalado no se declara integración.", ImplementationState=TargetImplementationState.NotImplemented }
     };
 }
+#endif
