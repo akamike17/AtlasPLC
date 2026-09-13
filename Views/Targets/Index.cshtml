@@ -19,5 +19,4 @@
 </div>
 <script>
 document.querySelectorAll('.configure-target').forEach(b => b.addEventListener('click', () => { const p=document.querySelector(`[data-config-for="${b.dataset.target}"]`); p.hidden=!p.hidden; }));
-document.querySelectorAll('.save-target-config').forEach(b => b.addEventListener('click', () => { const p=b.closest('.target-config'); const key='atlas-target-'+p.dataset.configFor; localStorage.setItem(key, JSON.stringify({endpoint:p.querySelector('.config-endpoint').value,port:p.querySelector('.config-port').value})); p.querySelector('.config-result').textContent='Configuración guardada · lista para probar'; }));
 </script>
