@@ -1,4 +1,5 @@
 using System.Xml.Linq;
+using System.Text;
 using AtlasSoftPlc.Application.Backends;
 using AtlasSoftPlc.Application.Ir;
 using AtlasSoftPlc.Domain.Logic;
@@ -19,6 +20,11 @@ public sealed class PlcOpenXmlEmitterTests
         Assert.Equal(first.Xml, second.Xml);
         Assert.Equal(first.Hash, second.Hash);
         Assert.Equal("project", XDocument.Parse(first.Xml).Root!.Name.LocalName);
+        XNamespace plc = "http://www.plcopen.org/xml/tc6_0201";
+        Assert.All(XDocument.Parse(first.Xml).Root!.Descendants(), element => Assert.Equal(plc, element.Name.Namespace));
+        Assert.Contains("encoding=\"utf-8\"", first.Xml, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(first.Xml, Encoding.UTF8.GetString(Encoding.UTF8.GetBytes(first.Xml)));
+        Assert.Equal("PLCopen XML candidate", first.Status);
         Assert.Contains("AtlasProgram", first.Xml);
     }
 

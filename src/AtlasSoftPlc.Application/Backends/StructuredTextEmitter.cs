@@ -29,20 +29,33 @@ public sealed class StructuredTextEmitter
         lines.Add("END_VAR");
         var map = new List<SourceMapEntry>();
         var diagnostics = new List<EmitterDiagnostic>();
-        foreach (var rule in program.Logic.Rules.Where(r => r.Enabled))
+        foreach (var rule in program.Logic.Rules.Where(r => r.Enabled).OrderByDescending(r => r.Priority).ThenBy(r => r.Id))
         {
-            foreach (var action in rule.Actions)
+            var allActions = rule.Actions.Concat(rule.ElseActions).ToList();
+            foreach (var action in allActions)
             {
                 if (action is not SetOutputAction and not SetMemoryAction)
                 {
                     diagnostics.Add(new("ATLAS-ST-0001", $"Acción no soportada por el subset ST: {action.GetType().Name}.", action.Id));
                     continue;
                 }
-                var target = action is SetOutputAction output ? output.VariableId : ((SetMemoryAction)action).VariableId;
+            }
+            foreach (var target in allActions.Where(a => a is SetOutputAction or SetMemoryAction).Select(a => a is SetOutputAction o ? o.VariableId : ((SetMemoryAction)a).VariableId).Distinct())
+            {
                 var variable = program.Variables.FirstOrDefault(v => v.Id == target);
                 var expression = Expression(rule.Condition, program.Variables, diagnostics, rule.Id);
                 if (variable is null || expression is null) continue;
-                lines.Add($"    IF {expression} THEN {Identifier(variable.Key)} := {BoolLiteral(action is SetOutputAction o ? o.Value : ((SetMemoryAction)action).Value)}; END_IF;");
+                if (variable.DataType != Domain.Common.PlcDataType.Bool)
+                {
+                    diagnostics.Add(new("ATLAS-ST-0003", $"La asignación booleana no soporta la variable no booleana {variable.Key}.", rule.Id));
+                    continue;
+                }
+                var trueAction = rule.Actions.OfType<LogicAction>().FirstOrDefault(a => SameTarget(a, target));
+                var falseAction = rule.ElseActions.OfType<LogicAction>().FirstOrDefault(a => SameTarget(a, target));
+                if (trueAction is null) continue;
+                var trueValue = ActionValue(trueAction);
+                var falseValue = falseAction is null ? "FALSE" : ActionValue(falseAction);
+                lines.Add($"    IF {expression} THEN {Identifier(variable.Key)} := {trueValue}; ELSE {Identifier(variable.Key)} := {falseValue}; END_IF;");
                 map.Add(new(rule.Id, lines.Count));
             }
         }
@@ -50,6 +63,20 @@ public sealed class StructuredTextEmitter
         var source = string.Join("\n", lines) + "\n";
         return new StructuredTextArtifact { Source = source, Hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(source))).ToLowerInvariant(), SourceMap = map, Diagnostics = diagnostics };
     }
+
+    private static bool SameTarget(LogicAction action, Guid target) => action switch
+    {
+        SetOutputAction o => o.VariableId == target,
+        SetMemoryAction m => m.VariableId == target,
+        _ => false
+    };
+
+    private static string ActionValue(LogicAction action) => action switch
+    {
+        SetOutputAction o => BoolLiteral(o.Value),
+        SetMemoryAction m => BoolLiteral(m.Value),
+        _ => throw new InvalidOperationException("Unsupported action")
+    };
 
     private static string? Expression(ExpressionNode? node, IReadOnlyCollection<VariableDefinition> variables, List<EmitterDiagnostic> diagnostics, Guid elementId)
     {
