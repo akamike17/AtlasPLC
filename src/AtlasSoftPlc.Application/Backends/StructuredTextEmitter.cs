@@ -20,6 +20,8 @@ public sealed class StructuredTextArtifact
 /// <summary>Emite sólo el subset booleano y assignments que Atlas puede verificar.</summary>
 public sealed class StructuredTextEmitter
 {
+    private sealed record EffectiveWrite(Guid RuleId, Guid VariableId, string Value, ExpressionNode? Condition, bool IsElse, bool IsMemory);
+
     public StructuredTextArtifact Emit(PlcProgramDefinition program)
     {
         ArgumentNullException.ThrowIfNull(program);
@@ -30,15 +32,22 @@ public sealed class StructuredTextEmitter
         var map = new List<SourceMapEntry>();
         var diagnostics = new List<EmitterDiagnostic>();
         var enabledRules = program.Logic.Rules.Where(r => r.Enabled).ToList();
-        foreach (var group in enabledRules.SelectMany(r => r.Actions.OfType<SetOutputAction>().Select(a => (Rule: r, Action: a))).GroupBy(x => x.Action.VariableId))
+        var writes = enabledRules.SelectMany(r => r.Actions.Concat(r.ElseActions).Select(a => ToWrite(r, a))).Where(w => w is not null).Cast<EffectiveWrite>().ToList();
+        foreach (var group in writes.GroupBy(w => (w.VariableId, w.IsMemory)))
         {
             var writers = group.ToList();
+            if (writers.Any(w => ToDnf(EffectiveCondition(w)) is null) && !writers.All(w => writers.Any(other => other.RuleId == w.RuleId && other.IsElse != w.IsElse)))
+                diagnostics.Add(new("ATLAS-ST-0005", $"No se puede demostrar exclusión mutua para la variable {group.Key.VariableId}.", group.Key.VariableId));
             for (var i = 0; i < writers.Count; i++)
                 for (var j = i + 1; j < writers.Count; j++)
-                    if (!MutuallyExclusive(writers[i].Rule.Condition, writers[j].Rule.Condition))
-                        diagnostics.Add(new("ATLAS-ST-0004", $"La salida {group.Key} tiene escritores que pueden competir en el mismo scan; no se puede preservar el arbitraje en ST.", group.Key));
+                {
+                    if (writers[i].RuleId == writers[j].RuleId && writers[i].IsElse != writers[j].IsElse)
+                        continue;
+                    if (!MutuallyExclusive(EffectiveCondition(writers[i]), EffectiveCondition(writers[j])))
+                        diagnostics.Add(new("ATLAS-ST-0004", $"La variable {group.Key.VariableId} tiene escritores que pueden competir en el mismo scan; no se puede preservar el arbitraje en ST.", group.Key.VariableId));
+                }
         }
-        foreach (var rule in enabledRules.OrderBy(r => r.Id))
+        foreach (var rule in enabledRules)
         {
             var allActions = rule.Actions.Concat(rule.ElseActions).ToList();
             foreach (var action in allActions)
@@ -61,11 +70,14 @@ public sealed class StructuredTextEmitter
                 }
                 var trueAction = rule.Actions.OfType<LogicAction>().FirstOrDefault(a => SameTarget(a, target));
                 var falseAction = rule.ElseActions.OfType<LogicAction>().FirstOrDefault(a => SameTarget(a, target));
-                if (trueAction is null) continue;
-                var trueValue = ActionValue(trueAction);
-                var branch = falseAction is null
-                    ? $"IF {expression} THEN {Identifier(variable.Key)} := {trueValue}; END_IF; (* retains previous value when FALSE *)"
-                    : $"IF {expression} THEN {Identifier(variable.Key)} := {trueValue}; ELSE {Identifier(variable.Key)} := {ActionValue(falseAction)}; END_IF;";
+                var branch = trueAction is not null
+                    ? falseAction is null
+                        ? $"IF {expression} THEN {Identifier(variable.Key)} := {ActionValue(trueAction)}; END_IF; (* retains previous value when FALSE *)"
+                        : $"IF {expression} THEN {Identifier(variable.Key)} := {ActionValue(trueAction)}; ELSE {Identifier(variable.Key)} := {ActionValue(falseAction)}; END_IF;"
+                    : falseAction is not null
+                        ? $"IF NOT ({expression}) THEN {Identifier(variable.Key)} := {ActionValue(falseAction)}; END_IF; (* retains previous value when TRUE *)"
+                        : string.Empty;
+                if (branch.Length == 0) continue;
                 lines.Add($"    {branch}");
                 map.Add(new(rule.Id, lines.Count));
             }
@@ -74,6 +86,17 @@ public sealed class StructuredTextEmitter
         var source = string.Join("\n", lines) + "\n";
         return new StructuredTextArtifact { Source = source, Hash = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(source))).ToLowerInvariant(), SourceMap = map, Diagnostics = diagnostics };
     }
+
+    private static EffectiveWrite? ToWrite(LogicRule rule, LogicAction action) => action switch
+    {
+        SetOutputAction o => new(rule.Id, o.VariableId, o.Value, rule.Condition, rule.ElseActions.Contains(action), false),
+        SetMemoryAction m => new(rule.Id, m.VariableId, m.Value, rule.Condition, rule.ElseActions.Contains(action), true),
+        _ => null
+    };
+
+    private static ExpressionNode? EffectiveCondition(EffectiveWrite write) => write.IsElse
+        ? write.Condition is null ? new ConstantExpression { Value = "false" } : new NotExpression { Operand = write.Condition }
+        : write.Condition;
 
     private static bool SameTarget(LogicAction action, Guid target) => action switch
     {

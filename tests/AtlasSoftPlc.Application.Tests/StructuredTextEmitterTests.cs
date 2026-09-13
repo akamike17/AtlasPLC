@@ -15,16 +15,39 @@ public sealed class StructuredTextEmitterTests
         var stop = new VariableDefinition { Key = "Stop", DataType = AtlasSoftPlc.Domain.Common.PlcDataType.Bool };
         var guard = new VariableDefinition { Key = "Guard", DataType = AtlasSoftPlc.Domain.Common.PlcDataType.Bool };
         var motor = new VariableDefinition { Key = "Motor", DataType = AtlasSoftPlc.Domain.Common.PlcDataType.Bool };
-        var rule = new LogicRule { Condition = new AndExpression { Operands = new() { new VariableExpression { VariableId = start.Id }, new NotExpression { Operand = new VariableExpression { VariableId = stop.Id } }, new VariableExpression { VariableId = guard.Id } } }, Actions = new() { new SetOutputAction { VariableId = motor.Id, Value = "true" } } };
-        var elseRule = new LogicRule { Condition = new VariableExpression { VariableId = stop.Id }, Actions = new() { new SetOutputAction { VariableId = motor.Id, Value = "false" } }, ElseActions = new() { new SetOutputAction { VariableId = motor.Id, Value = "true" } } };
-        var artifact = new StructuredTextEmitter().Emit(new PlcProgramDefinition { Variables = new() { start, stop, guard, motor }, Logic = new LogicProgram { Rules = new() { rule, elseRule } } });
+        var rule = new LogicRule { Condition = new AndExpression { Operands = new() { new VariableExpression { VariableId = start.Id }, new NotExpression { Operand = new VariableExpression { VariableId = stop.Id } }, new VariableExpression { VariableId = guard.Id } } }, Actions = new() { new SetOutputAction { VariableId = motor.Id, Value = "true" } }, ElseActions = new() { new SetOutputAction { VariableId = motor.Id, Value = "false" } } };
+        var artifact = new StructuredTextEmitter().Emit(new PlcProgramDefinition { Variables = new() { start, stop, guard, motor }, Logic = new LogicProgram { Rules = new() { rule } } });
         Assert.True(artifact.IsSupported);
         Assert.Contains("Start", artifact.Source);
         Assert.Contains("NOT (Stop)", artifact.Source);
         Assert.Contains("Guard", artifact.Source);
         Assert.Contains("Motor := TRUE", artifact.Source);
-        Assert.Contains("retains previous value", artifact.Source);
-        Assert.Contains("ELSE Motor := TRUE", artifact.Source);
+        Assert.Contains("ELSE Motor := FALSE", artifact.Source);
+    }
+
+    [Fact]
+    public void ActionOnlyOutputRetainsPreviousValueWhenConditionBecomesFalse()
+    {
+        var condition = new VariableDefinition { Key = "Condition", DataType = AtlasSoftPlc.Domain.Common.PlcDataType.Bool };
+        var output = new VariableDefinition { Key = "Output", DataType = AtlasSoftPlc.Domain.Common.PlcDataType.Bool };
+        var rule = new LogicRule { Condition = new VariableExpression { VariableId = condition.Id }, Actions = new() { new SetOutputAction { VariableId = output.Id, Value = "true" } } };
+        var artifact = new StructuredTextEmitter().Emit(new PlcProgramDefinition { Variables = new() { condition, output }, Logic = new LogicProgram { Rules = new() { rule } } });
+        Assert.True(artifact.IsSupported);
+        Assert.Contains("IF Condition THEN Output := TRUE; END_IF;", artifact.Source);
+        Assert.Contains("retains previous value when FALSE", artifact.Source);
+        Assert.DoesNotContain("ELSE Output := FALSE", artifact.Source);
+    }
+
+    [Fact]
+    public void ElseOnlyAction_IsEmittedAndMatchesRuntimeBranch()
+    {
+        var condition = new VariableDefinition { Key = "Condition", DataType = AtlasSoftPlc.Domain.Common.PlcDataType.Bool };
+        var output = new VariableDefinition { Key = "Output", DataType = AtlasSoftPlc.Domain.Common.PlcDataType.Bool };
+        var rule = new LogicRule { Condition = new VariableExpression { VariableId = condition.Id }, ElseActions = new() { new SetOutputAction { VariableId = output.Id, Value = "true" } } };
+        var artifact = new StructuredTextEmitter().Emit(new PlcProgramDefinition { Variables = new() { condition, output }, Logic = new LogicProgram { Rules = new() { rule } } });
+        Assert.True(artifact.IsSupported);
+        Assert.Contains("IF NOT (Condition) THEN Output := TRUE; END_IF;", artifact.Source);
+        Assert.DoesNotContain("ELSE Output := FALSE", artifact.Source);
     }
 
     [Fact]
