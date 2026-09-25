@@ -1,12 +1,14 @@
 using System.Text;
 using AtlasSoftPlc.Domain.Ir;
 using AtlasSoftPlc.Domain.Logic;
+using AtlasSoftPlc.Domain.Common;
 using AtlasSoftPlc.Domain.Values;
 
 namespace AtlasSoftPlc.Application.Logic;
 
 /// <summary>
 /// Traduce la IR de Atlas a lenguaje Structured Text (ST) siguiendo el estándar IEC 61131-3.
+/// Versión Estricta: Sin fallbacks genéricos.
 /// </summary>
 public class StGenerator
 {
@@ -22,7 +24,19 @@ public class StGenerator
             string stType = v.DataType switch
             {
                 PlcDataType.Bool => "BOOL",
-                _ => "BOOL" // Simplificación MVP
+                PlcDataType.Int16 => "INT",
+                PlcDataType.UInt16 => "UINT",
+                PlcDataType.Int32 => "DINT",
+                PlcDataType.UInt32 => "UDINT",
+                PlcDataType.Int64 => "LINT",
+                PlcDataType.UInt64 => "ULINT",
+                PlcDataType.Float => "REAL",
+                PlcDataType.Double => "LREAL",
+                PlcDataType.Decimal => "LREAL",
+                PlcDataType.String => "STRING",
+                PlcDataType.DateTime => "DATE_AND_TIME",
+                PlcDataType.TimeSpan => "TIME",
+                _ => throw new NotSupportedException($"Tipo de dato {v.DataType} no soportado para exportación ST.")
             };
             sb.AppendLine($"    {v.Key} : {stType};");
         }
@@ -35,20 +49,10 @@ public class StGenerator
         {
             if (rule.Condition == null) continue;
 
-            // En Atlas, la lógica se traduce como asignaciones directas.
-            // Buscamos la acción SetOutput para saber qué variable estamos controlando.
-            var outputAction = rule.Actions.FirstOrDefault(a => a.GetType().Name == "SetOutputAction");
-            
-            string targetVar = "result";
-            
-            // Intento de obtener el ID de la variable mediante reflexión ya que SetOutputAction no es visible aquí
-            var varIdProp = outputAction?.GetType().GetProperty("VariableId");
-            if (varIdProp != null)
-            {
-                var id = (Guid)varIdProp.GetValue(outputAction)!;
-                targetVar = GetVariableKey(id, ir);
-            }
+            var outputAction = rule.Actions.OfType<SetOutputAction>().FirstOrDefault();
+            if (outputAction == null) continue;
 
+            string targetVar = GetVariableKey(outputAction.VariableId, ir);
             var expression = TranslateExpression(rule.Condition, ir);
             sb.AppendLine($"{targetVar} := {expression};");
         }
@@ -60,20 +64,32 @@ public class StGenerator
     {
         return node switch
         {
-            ConstantExpression c => c.Value.ToUpper(),
+            ConstantExpression c => TranslateConstant(c),
             VariableExpression v => GetVariableKey(v.VariableId, ir),
             NotExpression n => $"NOT ({TranslateExpression(n.Operand, ir)})",
             AndExpression a => string.Join(" AND ", a.Operands.Select(o => TranslateExpression(o, ir))),
             OrExpression o => string.Join(" OR ", o.Operands.Select(o => TranslateExpression(o, ir))),
             CompareExpression comp => $"({TranslateExpression(comp.Left, ir)} {TranslateOperator(comp.Operator)} {TranslateExpression(comp.Right, ir)})",
             ArithmeticExpression art => $"({TranslateExpression(art.Left, ir)} {TranslateOperator(art.Operator)} {TranslateExpression(art.Right, ir)})",
-            _ => "TRUE"
+            _ => throw new NotSupportedException($"Nodo de expresión {node.GetType().Name} no soportado en ST.")
+        };
+    }
+
+    private string TranslateConstant(ConstantExpression c)
+    {
+        return c.DataType switch
+        {
+            "Bool" => c.Value.ToUpper(),
+            "String" => $"'{c.Value}'",
+            _ => c.Value // Numéricos directos
         };
     }
 
     private string GetVariableKey(Guid id, AtlasIrDocument ir)
     {
-        return ir.Variables.FirstOrDefault(v => v.Id == id)?.Key ?? $"VAR_{id.ToString().Substring(0, 8)}";
+        var v = ir.Variables.FirstOrDefault(x => x.Id == id);
+        if (v == null) throw new KeyNotFoundException($"Variable {id} no encontrada en la IR.");
+        return v.Key;
     }
 
     private string TranslateOperator(CompareOperator op)
@@ -86,7 +102,7 @@ public class StGenerator
             CompareOperator.GreaterThanOrEqual => ">=",
             CompareOperator.LessThan => "<",
             CompareOperator.LessThanOrEqual => "<=",
-            _ => "="
+            _ => throw new NotSupportedException($"Operador de comparación {op} no soportado.")
         };
     }
 
@@ -99,7 +115,7 @@ public class StGenerator
             ArithmeticOperator.Multiply => "*",
             ArithmeticOperator.Divide => "/",
             ArithmeticOperator.Modulo => "MOD",
-            _ => "+"
+            _ => throw new NotSupportedException($"Operador aritmético {op} no soportado.")
         };
     }
 }

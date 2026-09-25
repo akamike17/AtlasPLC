@@ -3,6 +3,7 @@ using AtlasSoftPlc.Domain.Runtime;
 using AtlasSoftPlc.Domain.Simulation;
 using AtlasSoftPlc.Domain.Values;
 using AtlasSoftPlc.Domain.Variables;
+using AtlasSoftPlc.Domain.Common;
 using AtlasSoftPlc.Runtime.Engine;
 using AtlasSoftPlc.Runtime.Expressions;
 
@@ -98,16 +99,16 @@ public class AtlasScenarioRunner
                 }
 
                 var scanRes = _coordinator.Scan(scanReq);
-                currentMemory = scanRes.Memory.ToDictionary();
-                
+                currentMemory = scanRes.Memory.Values.ToDictionary(k => k.Key, v => v.Value);
+
                 // --- VERIFICACIÓN DE INVARIANTES ---
                 foreach (var inv in scenario.Invariants)
                 {
                     var ctx = new ScanExpressionContext(
-                        scanRes.Inputs.ToDictionary(), 
-                        scanRes.Memory.ToDictionary(), 
-                        null!, null!, 
-                        new VariableSnapshotContext(ir.VariablesById, currentMemory), 
+                        scanRes.Inputs,
+                        scanRes.Memory,
+                        null!, null!,
+                        new VariableSnapshotContext(ir.VariablesById, currentMemory),
                         new Dictionary<Guid, bool>());
 
                     if (!EvaluateInvariant(inv.Condition, ctx))

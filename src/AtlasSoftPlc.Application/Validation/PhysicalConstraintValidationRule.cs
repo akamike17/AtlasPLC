@@ -4,6 +4,9 @@ using AtlasSoftPlc.Domain.Variables;
 using AtlasSoftPlc.Domain.Values;
 using AtlasSoftPlc.Runtime.Expressions;
 using AtlasSoftPlc.Domain.Runtime;
+using AtlasSoftPlc.Domain.Common;
+using AtlasSoftPlc.Runtime.Engine;
+using AtlasSoftPlc.Runtime.Snapshots;
 using System.Collections.Generic;
 using System.Linq;
 
@@ -107,13 +110,10 @@ public sealed class PhysicalConstraintValidationRule : IValidationRule
         }
 
         return new ScanExpressionContext(
-            values.ToDictionary(k => k.Key, v => v.Value),
-            new Dictionary<Guid, RuntimeValue>(),
+            new InputSnapshot(values.ToDictionary(k => k.Key, v => v.Value)),
+            new MemorySnapshot(new Dictionary<Guid, RuntimeValue>()),
             null!, null!,
             new VariableSnapshotContext(variables, values),
             new Dictionary<Guid, bool>());
     }
 }
-
-// Mock para evitar errores de compilación
-public class SetOutputAction : LogicAction { public Guid VariableId { get; set; } }
