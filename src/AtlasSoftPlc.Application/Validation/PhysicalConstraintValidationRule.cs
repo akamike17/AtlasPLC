@@ -94,7 +94,7 @@ public sealed class PhysicalConstraintValidationRule : IValidationRule
         var ctxFalse = CreateTestContext(variables, varId, false);
         var resFalse = engine.Evaluate(condition, ctxFalse);
 
-        if (!resTrue.Ok || !resFalse.Ok) return true; // Si falla la eval, asumimos riesgo y marcamos como no influente/sospechosa
+        if (!resTrue.Ok || !resFalse.Ok) return false; // FAIL-CLOSED: Si la evaluación falla, marcamos como no influente para bloquear la despliegue.
 
         // Si el resultado es el mismo independientemente del valor de la variable, entonces no es influente.
         return resTrue.Value.AsBool() != resFalse.Value.AsBool();

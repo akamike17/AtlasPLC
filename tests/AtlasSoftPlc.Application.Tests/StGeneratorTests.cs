@@ -1,7 +1,9 @@
 using AtlasSoftPlc.Domain.Ir;
 using AtlasSoftPlc.Application.Logic;
+using AtlasSoftPlc.Domain.Variables;
+using AtlasSoftPlc.Domain.Common;
+using AtlasSoftPlc.Domain.Logic;
 using Xunit;
-using FluentAssertions;
 
 namespace AtlasSoftPlc.Application.Tests.Logic;
 
@@ -27,12 +29,16 @@ public class StGeneratorTests
             {
                 Rules = new List<LogicRule>
                 {
-                    new() { 
-                        TargetVariableId = motorId, 
-                        Expression = new AndNode(
-                            new VariableNode(startId), 
-                            new NotNode(new VariableNode(stopId))
-                        ) 
+                    new() {
+                        Id = Guid.NewGuid(),
+                        Name = "PumpRule",
+                        Condition = new AndExpression { 
+                            Operands = new List<ExpressionNode> { 
+                                new VariableExpression { VariableId = startId, VariableKey = "Start" },
+                                new NotExpression { Operand = new VariableExpression { VariableId = stopId, VariableKey = "Stop" } }
+                            }
+                        },
+                        Actions = new List<LogicAction> { new SetOutputAction { VariableId = motorId, Value = "true" } }
                     }
                 }
             }
@@ -41,11 +47,11 @@ public class StGeneratorTests
         var generator = new StGenerator();
         var stCode = generator.Generate(ir);
 
-        stCode.Should().Contain("VAR");
-        stCode.Should().Contain("Start : BOOL;");
-        stCode.Should().Contain("Stop : BOOL;");
-        stCode.Should().Contain("Motor : BOOL;");
-        stCode.Should().Contain("END_VAR");
-        stCode.Should().Contain("Motor := (Start AND NOT (Stop));");
+        Assert.Contains("VAR", stCode);
+        Assert.Contains("Start : BOOL;", stCode);
+        Assert.Contains("Stop : BOOL;", stCode);
+        Assert.Contains("Motor : BOOL;", stCode);
+        Assert.Contains("END_VAR", stCode);
+        Assert.Contains("Motor := Start AND NOT (Stop);", stCode);
     }
 }

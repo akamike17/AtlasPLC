@@ -2,8 +2,10 @@ using AtlasSoftPlc.Domain.Ir;
 using AtlasSoftPlc.Domain.Simulation;
 using AtlasSoftPlc.Application.Simulation;
 using AtlasSoftPlc.Runtime.Engine;
+using AtlasSoftPlc.Domain.Variables;
+using AtlasSoftPlc.Domain.Common;
+using AtlasSoftPlc.Domain.Logic;
 using Xunit;
-using FluentAssertions;
 
 namespace AtlasSoftPlc.Application.Tests.Simulation;
 
@@ -22,20 +24,24 @@ public class ScenarioRunnerTests
             Name = "Test Scenario",
             Variables = new List<VariableDefinition>
             {
-                new() { Id = startId, Key = "Start", Type = PlcDataType.Boolean },
-                new() { Id = stopId, Key = "Stop", Type = PlcDataType.Boolean },
-                new() { Id = motorId, Key = "Motor", Type = PlcDataType.Boolean },
+                new() { Id = startId, Key = "Start", DataType = PlcDataType.Bool },
+                new() { Id = stopId, Key = "Stop", DataType = PlcDataType.Bool },
+                new() { Id = motorId, Key = "Motor", DataType = PlcDataType.Bool },
             },
             Logic = new LogicProgram
             {
                 Rules = new List<LogicRule>
                 {
-                    new() { 
-                        TargetVariableId = motorId, 
-                        Expression = new AndNode(
-                            new VariableNode(startId), 
-                            new NotNode(new VariableNode(stopId))
-                        ) 
+                    new() {
+                        Id = Guid.NewGuid(),
+                        Name = "PumpRule",
+                        Condition = new AndExpression { 
+                            Operands = new List<ExpressionNode> { 
+                                new VariableExpression { VariableId = startId, VariableKey = "Start" },
+                                new NotExpression { Operand = new VariableExpression { VariableId = stopId, VariableKey = "Stop" } }
+                            }
+                        },
+                        Actions = new List<LogicAction> { new SetOutputAction { VariableId = motorId, Value = "true" } }
                     }
                 }
             }
@@ -48,17 +54,17 @@ public class ScenarioRunnerTests
             Name = "Motor Logic Test",
             Steps = new List<ScenarioStep>
             {
-                new() 
-                { 
-                    Description = "Start activated", 
-                    InputOverrides = new Dictionary<Guid, bool> { { startId, true } }, 
-                    ExpectedOutputs = new Dictionary<Guid, bool> { { motorId, true } } 
+                new()
+                {
+                    Description = "Start activated",
+                    InputOverrides = new Dictionary<Guid, bool> { { startId, true } },
+                    ExpectedOutputs = new Dictionary<Guid, bool> { { motorId, true } }
                 },
-                new() 
-                { 
-                    Description = "Stop activated", 
-                    InputOverrides = new Dictionary<Guid, bool> { { stopId, true } }, 
-                    ExpectedOutputs = new Dictionary<Guid, bool> { { motorId, false } } 
+                new()
+                {
+                    Description = "Stop activated",
+                    InputOverrides = new Dictionary<Guid, bool> { { stopId, true } },
+                    ExpectedOutputs = new Dictionary<Guid, bool> { { motorId, false } }
                 }
             }
         };

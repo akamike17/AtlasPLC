@@ -1,7 +1,6 @@
 using AtlasSoftPlc.Domain.Ir;
 using AtlasSoftPlc.Application.Logic;
 using Xunit;
-using FluentAssertions;
 
 namespace AtlasSoftPlc.Application.Tests.Logic;
 
@@ -21,8 +20,8 @@ Motor := Start;";
         var linter = new StLinter();
         var result = linter.Lint(code);
 
-        result.IsValid.Should().BeTrue();
-        result.Errors.Should().BeEmpty();
+        Assert.True(result.IsValid);
+        Assert.Empty(result.Errors);
     }
 
     [Fact]
@@ -38,8 +37,8 @@ Motor := Start"; // Falta ;
         var linter = new StLinter();
         var result = linter.Lint(code);
 
-        result.IsValid.Should().BeFalse();
-        result.Errors.Should().Contain(e => e.Contains("punto y coma"));
+        Assert.False(result.IsValid);
+        Assert.Contains(result.Errors, e => e.Contains("punto y coma"));
     }
 
     [Fact]
@@ -55,8 +54,8 @@ Motor := (Start;"; // Paréntesis no cerrado
         var linter = new StLinter();
         var result = linter.Lint(code);
 
-        result.IsValid.Should().BeFalse();
-        result.Errors.Should().Contain(e => e.Contains("Paréntesis no balanceados"));
+        Assert.False(result.IsValid);
+        Assert.Contains(result.Errors, e => e.Contains("Paréntesis no balanceados"));
     }
 
     [Fact]
@@ -67,7 +66,7 @@ Motor := (Start;"; // Paréntesis no cerrado
         var linter = new StLinter();
         var result = linter.Lint(code);
 
-        result.IsValid.Should().BeFalse();
-        result.Errors.Should().Contain(e => e.Contains("VAR/END_VAR"));
+        Assert.False(result.IsValid);
+        Assert.Contains(result.Errors, e => e.Contains("VAR/END_VAR"));
     }
 }

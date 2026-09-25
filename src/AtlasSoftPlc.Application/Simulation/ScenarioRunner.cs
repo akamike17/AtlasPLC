@@ -6,6 +6,7 @@ using AtlasSoftPlc.Domain.Variables;
 using AtlasSoftPlc.Domain.Common;
 using AtlasSoftPlc.Runtime.Engine;
 using AtlasSoftPlc.Runtime.Expressions;
+using AtlasSoftPlc.Domain.Logic;
 
 namespace AtlasSoftPlc.Application.Simulation;
 
@@ -17,6 +18,7 @@ public sealed class ChaosConfig
     public double PacketLossChance { get; init; } = 0.0; // 0.0 to 1.0
     public double LatencyMaxMs { get; init; } = 0.0;
     public double JitterChance { get; init; } = 0.0; // Chance of value flipping randomly
+    public int? Seed { get; init; } = null; // For determinism/replayability
 }
 
 /// <summary>
@@ -27,7 +29,6 @@ public class AtlasScenarioRunner
 {
     private readonly ScanCoordinator _coordinator;
     private readonly ExpressionEngine _exprEngine;
-    private readonly Random _random = new();
 
     public AtlasScenarioRunner(ScanCoordinator coordinator)
     {
@@ -37,9 +38,11 @@ public class AtlasScenarioRunner
 
     public ScenarioResult Run(AtlasIrDocument ir, SimulationScenario scenario, ChaosConfig? chaos = null)
     {
+        var random = chaos?.Seed != null ? new Random(chaos.Seed.Value) : new Random();
         var result = new ScenarioResult { ScenarioName = scenario.Name };
         var currentInputs = new Dictionary<Guid, RuntimeValue>();
         var currentMemory = new Dictionary<Guid, RuntimeValue>();
+        var latencyQueue = new Queue<(double releaseTime, Dictionary<Guid, RuntimeValue> values)>();
 
         // Inicializar entradas con false
         foreach (var v in ir.Variables.Where(x => x.DataType == PlcDataType.Bool))
@@ -59,21 +62,42 @@ public class AtlasScenarioRunner
             // 2. Simular el tiempo de estabilización (múltiples scans)
             double elapsed = 0;
             const double scanInterval = 10.0; // 10ms simulated
-            while (elapsed < step.SettleTimeMs)
+            do
             {
+                // --- IMPLEMENTACIÓN DE LATENCIA REAL ---
+                // Si hay latencia, los inputs actuales no se aplican inmediatamente, se encolan.
+                double currentLatency = 0;
+                if (chaos != null && chaos.LatencyMaxMs > 0)
+                {
+                    currentLatency = random.NextDouble() * chaos.LatencyMaxMs;
+                }
+
+                var valuesToApply = new Dictionary<Guid, RuntimeValue>(currentInputs);
+                latencyQueue.Enqueue((elapsed + currentLatency, valuesToApply));
+
+                // Aplicar solo los valores cuya latencia ya ha expirado
+                var effectiveInputs = new Dictionary<Guid, RuntimeValue>(currentInputs); // fallback to last known
+                while (latencyQueue.Count > 0 && latencyQueue.Peek().releaseTime <= elapsed)
+                {
+                    var released = latencyQueue.Dequeue();
+                    foreach (var kvp in released.values)
+                    {
+                        effectiveInputs[kvp.Key] = kvp.Value;
+                    }
+                }
+
                 // --- INYECCIÓN DE FALLOS (Chaos Engineering) ---
-                var effectiveInputs = new Dictionary<Guid, RuntimeValue>(currentInputs);
                 if (chaos != null)
                 {
                     foreach (var key in effectiveInputs.Keys.ToList())
                     {
-                        // Simular pérdida de paquete (valor queda congelado o nulo)
-                        if (_random.NextDouble() < chaos.PacketLossChance)
+                        // Simular pérdida de paquete
+                        if (random.NextDouble() < chaos.PacketLossChance)
                         {
                             effectiveInputs[key] = new RuntimeValue { VariableId = key, Value = PlcValue.Null(PlcDataType.Bool) };
                         }
-                        // Simular Jitter (valor flipa aleatoriamente)
-                        else if (_random.NextDouble() < chaos.JitterChance)
+                        // Simular Jitter
+                        else if (random.NextDouble() < chaos.JitterChance)
                         {
                             var currentVal = effectiveInputs[key].Value.AsBool();
                             effectiveInputs[key] = new RuntimeValue { VariableId = key, Value = new PlcValue(PlcDataType.Bool, !currentVal) };
@@ -91,13 +115,6 @@ public class AtlasScenarioRunner
                     ir.VariablesById.ToDictionary(k => k.Value.Id, v => v.Value.DataType),
                     scanInterval);
 
-                // Simular latencia (en la realidad esto afectaría al timing del scan)
-                if (chaos != null && chaos.LatencyMaxMs > 0)
-                {
-                    // En un runner determinista, la latencia se modela como scans perdidos o retardos
-                    // Aquí simulamos que el scan tarda más, afectando la percepción del tiempo
-                }
-
                 var scanRes = _coordinator.Scan(scanReq);
                 currentMemory = scanRes.Memory.Values.ToDictionary(k => k.Key, v => v.Value);
 
@@ -111,7 +128,7 @@ public class AtlasScenarioRunner
                         new VariableSnapshotContext(ir.VariablesById, currentMemory),
                         new Dictionary<Guid, bool>());
 
-                    if (!EvaluateInvariant(inv.Condition, ctx))
+                    if (!EvaluateInvariant(inv.Condition, ctx, ir))
                     {
                         result.IsSuccess = false;
                         result.Errors.Add($"Invariante violada en scan {scanRes.ScanNumber} (Paso: {step.Description}): {inv.Description}");
@@ -120,7 +137,7 @@ public class AtlasScenarioRunner
                 }
 
                 elapsed += scanInterval;
-            }
+            } while (elapsed < step.SettleTimeMs);
 
             // 3. Verificar salidas esperadas al final del paso
             var stepErrors = new List<string>();
@@ -145,11 +162,46 @@ public class AtlasScenarioRunner
         return result;
     }
 
-    private bool EvaluateInvariant(string condition, IExpressionContext ctx)
+    private bool EvaluateInvariant(string condition, IExpressionContext ctx, AtlasIrDocument ir)
     {
         if (string.IsNullOrEmpty(condition)) return true;
-        if (condition == "FALSE") return false;
-        return true; 
+        
+        try 
+        {
+            var node = ParseInvariantCondition(condition, ir);
+            var result = _exprEngine.Evaluate(node, ctx);
+            return result.Ok && result.Value.AsBool();
+        }
+        catch
+        {
+            return false; // Fail-closed on evaluation error
+        }
+    }
+
+    private ExpressionNode ParseInvariantCondition(string condition, AtlasIrDocument ir)
+    {
+        condition = condition.Trim();
+        if (condition.Equals("TRUE", StringComparison.OrdinalIgnoreCase)) return new ConstantExpression { DataType = "Bool", Value = "true" };
+        if (condition.Equals("FALSE", StringComparison.OrdinalIgnoreCase)) return new ConstantExpression { DataType = "Bool", Value = "false" };
+
+        // Simple "Variable == true" or "Variable"
+        var parts = condition.Split(new[] { "==", " = " }, StringSplitOptions.RemoveEmptyEntries);
+        var varKey = parts[0].Trim();
+        var variable = ir.Variables.FirstOrDefault(v => v.Key == varKey);
+        
+        if (variable == null) throw new Exception($"Invariant variable {varKey} not found");
+
+        if (parts.Length == 1 || (parts.Length == 2 && parts[1].Trim().Equals("true", StringComparison.OrdinalIgnoreCase)))
+        {
+            return new VariableExpression { VariableId = variable.Id, VariableKey = variable.Key };
+        }
+        
+        if (parts.Length == 2 && parts[1].Trim().Equals("false", StringComparison.OrdinalIgnoreCase))
+        {
+            return new NotExpression { Operand = new VariableExpression { VariableId = variable.Id, VariableKey = variable.Key } };
+        }
+
+        throw new NotSupportedException($"Invariant condition '{condition}' is too complex for the simple parser. Use a formal ExpressionNode.");
     }
 
     public sealed class ScenarioResult
