@@ -1,6 +1,20 @@
 namespace AtlasSoftPlc.Domain.Ir;
 
-/// <summary>Modelo físico mínimo para validar requisitos y exclusiones entre actuadores.</summary>
+/// <summary>
+/// Define el tipo de componente físico en la planta.
+/// Permite diferenciar el comportamiento y los requisitos de seguridad.
+/// </summary>
+public enum PlantComponentType
+{
+    Generic,
+    Motor,
+    Valve,
+    Sensor,
+    Heater,
+    Pump
+}
+
+/// <summary>Modelo físico para validar requisitos, exclusiones y seguridad entre actuadores.</summary>
 public sealed class PlantModel
 {
     public int SchemaVersion { get; init; } = 1;
@@ -12,6 +26,7 @@ public sealed class PlantComponent
     public Guid Id { get; init; } = Guid.NewGuid();
     public Guid VariableId { get; init; }
     public string Name { get; init; } = string.Empty;
+    public PlantComponentType Type { get; init; } = PlantComponentType.Generic;
     public bool RequiresSafeState { get; init; } = true;
     public bool RequiresPhysicalPermission { get; init; }
     public List<Guid> Requires { get; init; } = new();

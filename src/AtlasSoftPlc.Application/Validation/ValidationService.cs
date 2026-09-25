@@ -1,5 +1,6 @@
 using System.Text.RegularExpressions;
 using AtlasSoftPlc.Domain.Common;
+using AtlasSoftPlc.Domain.Ir;
 using AtlasSoftPlc.Domain.Logic;
 using AtlasSoftPlc.Domain.Variables;
 
@@ -12,10 +13,12 @@ namespace AtlasSoftPlc.Application.Validation;
 public sealed class ValidationService
 {
     private readonly IReadOnlyList<IValidationRule> _rules;
+    private readonly PhysicalConstraintValidationRule _physicalValidator;
 
     public ValidationService(IEnumerable<IValidationRule> rules)
     {
         _rules = rules.ToList();
+        _physicalValidator = new PhysicalConstraintValidationRule();
     }
 
     public ValidationReport Validate(
@@ -30,6 +33,20 @@ public sealed class ValidationService
             var issues = rule.Validate(program, variables, context);
             report.Issues.AddRange(issues);
         }
+        return report;
+    }
+
+    /// <summary>
+    /// Validación extendida que incluye el análisis de restricciones físicas del Plant Model.
+    /// </summary>
+    public ValidationReport ValidateFull(AtlasIrDocument ir)
+    {
+        var report = Validate(ir.Logic, ir.VariablesById);
+        
+        // Ejecutar el blindaje físico
+        var physicalIssues = _physicalValidator.ValidateFull(ir);
+        report.Issues.AddRange(physicalIssues);
+        
         return report;
     }
 }
